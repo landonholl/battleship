@@ -23,7 +23,7 @@ Two changes from the example FSM in the assignment:
 
 ## 2. State Diagram
 
-Each arrow is labeled `trigger / action`. The labels are kept short so the diagram stays readable. The full behavior of each state is in §4, and every failure path is in §5.
+Each arrow is labeled `trigger / action`. The labels are kept short so the diagram stays readable. The full behavior of each state is in #4, and every failure path is in #5.
 
 | Label | Meaning |
 | ----- | ------- |
@@ -33,9 +33,9 @@ Each arrow is labeled `trigger / action`. The labels are kept short so the diagr
 | `active MOVE`, `inactive MOVE` | A `MOVE` from the player who is or is not `active_player` |
 | `bad target` | A shot off the board (`INVALID_COORD`) or at a cell already fired at (`ALREADY_FIRED`) |
 | `ships left`, `fleet destroyed` | The defender does or does not still have unhit ship cells |
-| `one lost`, `both lost` | One or both seated players were lost, as defined in §3 |
+| `one lost`, `both lost` | One or both seated players were lost, as defined in #3 |
 
-**Mermaid link:** [Open my diagram in the Mermaid Live Editor](https://mermaid.live/edit#pako:eNqdlm1v2jAQx7_KyS8n6HgI0ObFpJSmK1ogVQirtjFFLjEQNcTINu26qt9955BACCnbyqv4cvfz-X_nCy9kxkNGTCIVVewqogtBV_XH1lRME8BfGAk2UxFPwPG0Lben7jAlg9HAnxKgEtKn0ts7a-APRp-Da9cLbh3rm-2Nt85VL0qxn62hHYx9y8v4hXXJ89qxbV9j-vbQHmXuZWMpZrtp4E-80da_aCj52l8tZ2L5djB0v9pb70NTyb9_Y_e_BHeDjLxfVp0Q473CAdNlmefY1mhym9GyRaEWPz78hHr900EF9HNqrFAaTLiPkhDWXCjoNBqNIqzK_21OUyrou6OR3ffhI9zG9JmJoFkDx728_BbomPdxcxLEHHf4CHPBGMiYq_fh7mkIKyYlXTCE2Z7nen8D7dsN41uo1tExW-Vj5shCqCaVOhFxBQfF4Z6rJVKx2lgOFa2YkEVaObwaqQvxSOMohNQapB4plQsGkfo_WpRUsVLdsLOw9wdXx1fr39AVpYCh5aD8Q_sKuIA7z8Vy3N5YY_sUuXBfswJVpbzrI4pD7JGdAu6uH-J4wvLOe4qShAlINnF8Kjq7lvqAupw6uFjEYrbH2UfJNj3Q02SnijvxA_f6YCKdxrxH2jLxYLAhs5DYWyFvCIcyoG4on4T7Z5hzMWf7Niwz_iLfYVbVJ8frs2AqP3gNJF0xUBtxArKbzIjYdo9cco24Gfg1GA7GY63aeDL6UkxmH3WciFxGawkxm6dDK47WmYDBOm3EakRRwHnM8BAhk0rwZxbqG7zkXGVKHk2ZNOpQwL09ZDFuLVi42zZzentQSj57YErCDCvAQhQR20l__J-i9RaToxLMCUS0WCrg86qPp_5d6lpKRhGo6ANLsJ2gLXajtOi60LtuW9Zz3WFwPXEcoHirozyZ3JuhUe9OamQhopCYSmxYjeDYXFG9JC_ab0qw_VZsSkx8RAk2v-ohFQ_1GY-5mJJp8orxa5p853yVIwTfLJbEnNNY4mqzDvf_iHYuuDsTfb5JFDGbvV4nhRDzhfwiZvesa7Q7ncZ5r3XeaPXaRo08E_O8d9ZuXLTaRrd50TQa3dZrjfxOd22eGYbRNZoX7W7PMDrtzusfeJ7XSg) (Way easier to see the whole state diagram this way)
+**Mermaid link:** [Open my diagram in the Mermaid Live Editor](https://mermaid.live/edit#pako:eNqdlm1v2jAQx7_KyS8n6Hgu5cWklLorWiAohFXbmCKXGIgaYuSYbl3V775zHiCEQLfyKr7c_c7-3_nIC5kLj5MeiRRT_MZnS8nW1afGTM5CwJ_nSz5XvgjBtLUts8fuMCOD0cCZEWARxE-Ft_fGwBmMPru3lu2OTeMbtSeJc9mLQuxnY0jdiWPYKT-3LnjempQ6GtOnQzpK3YvGQkyS1HWm9ijxzxsKvvSrYU4Nh7pD6ytNvA9NBf_-He1_ce8HKXm_LDshxtu5A8bLIs-kxmg6TmnpIleLHx9-QrX66aAC-jk2ligNPXjwQw82Qipo12q1PKzM_zSnHinoW6MR7TvwEcYBe-bSrVfAtK6vv7k65n3cjASBwAwfYSE5hygQ6n24B-bBmkcRW3KEUdu27LdA-3bD-AaqdXTMRvGYGTIXqkmFTkRczkEJeBBqhVSsNpZD-WsuozytGF6O1IV4YoHvQWx1Yw-kJp5Gv0_HDr35P6YflhFj9bC_8AYMbo4v2L-hSwoCQ8PEIgzpDQgJ97aFRRnfGRN6jpy7tWmZ3hahsu8uhqPtiZ9LsLuUiBchz_rxlx-GXEK4DYJz0ell1QfWRdbB-dLmd398Gj9Mtgd6xuxUsqaOa90ezKnzmPdIXSQejDtk5jZ2KuSEcCgD6obyRfDwDAshF9xXpxhvyHe4q_KT46VacpUdvAIRW3NQW3kGspvXiEi6KVoJjbgbOBUYDiYTrdpkOvqS38w-6ngj0crfRBDwRTzKAn-TCuhu4kYsR-QFXAQcD-HxSEnxzD09LVZCqFTJo9kTRx0KuLd7PMDUknu7tKnT6fEZifkjVxHMsQLcQxGxnfQnwS9_k2AyVIh7AukvVwrEouwvVf-udS0jzhCo2CMPsZ2gKXcDNu-61FmTlrUta-jeTk0TGN5yP9tM5s3RqLOTCllK3yM9Jbe8QnCYrplekhftNyPYfms-Iz18RAm2v6sek4_VuQiEnJFZ-IrxGxZ-F2KdIaTYLlekt2BBhKvtxtt_J-1cMDuXfbENFenVO1cxg_ReyG_Sq9Zrze7FZbPdbV51W83LdoU8a2v9otPptjv1q2a71Wh1a-3XCvkTp21ctGr1WqdVb9baOu7y9S95Tdyh) (Way easier to see the whole state diagram this way)
 
 ```mermaid
 stateDiagram-v2
@@ -61,10 +61,10 @@ stateDiagram-v2
 
     GAME_START --> FLEET_PLACEMENT : GAME_START to both / start timers
 
-    FLEET_PLACEMENT --> FLEET_PLACEMENT : 1st valid PLACE_FLEET / store it
+    FLEET_PLACEMENT --> FLEET_PLACEMENT : 1st valid PLACE_FLEET / FLEET_ACCEPTED
     FLEET_PLACEMENT --> FLEET_PLACEMENT : invalid PLACE_FLEET / ERROR INVALID_PLACEMENT
     FLEET_PLACEMENT --> FLEET_PLACEMENT : bad message / ERROR MALFORMED or WRONG_PHASE
-    FLEET_PLACEMENT --> PLAYER_TURN : 2nd valid PLACE_FLEET / Player_1 active
+    FLEET_PLACEMENT --> PLAYER_TURN : 2nd valid PLACE_FLEET / FLEET_ACCEPTED, Player_1 active
     FLEET_PLACEMENT --> GAME_OVER : one lost / winner null
     FLEET_PLACEMENT --> CLEANUP : both lost
 
@@ -124,8 +124,8 @@ Where it happens will dictate what happens next:
 | `INIT` | transient | The server process starts | Bind the listening socket on port 5000, register it with the selector, create an empty session | `WAITING_FOR_PLAYERS` |
 | `WAITING_FOR_PLAYERS` | waiting | After `INIT`, or after `CLEANUP` | Accept connections. On a valid `CONNECT`, assign the next ID in join order (`Player_1`, then `Player_2`) and reply `LOBBY_WAIT`. If `Player_1` is lost, wipe the ID and free the slot. No timer runs here | `GAME_START` once `Player_2` is assigned |
 | `GAME_START` | transient | The 2nd valid `CONNECT` is accepted | Send each player `GAME_START` (opponent name, board size, fleet). Start a 500 s placement timer for each player | `FLEET_PLACEMENT` |
-| `FLEET_PLACEMENT` | waiting | `GAME_START` was sent | Validate each `PLACE_FLEET`. Store a valid layout and stop that player's timer. Reject an invalid one with `INVALID_PLACEMENT` (the timer keeps running). A `MOVE` or a 2nd `PLACE_FLEET` gets `WRONG_PHASE` | `PLAYER_TURN` once both layouts are stored, with `active_player` set to `Player_1`, a `STATE_UPDATE` to each player, and the turn timer started. `GAME_OVER` or `CLEANUP` if players are lost (§3) |
-| `PLAYER_TURN` | waiting | Both fleets stored, or `CHECK_WIN` found ships left, or `EVALUATE_MOVE` rejected a shot | Wait for a `MOVE` from `active_player`, whose turn timer is running. A `MOVE` from the other player gets `OUT_OF_TURN` | `EVALUATE_MOVE` on a `MOVE` from the active player. `GAME_OVER` or `CLEANUP` if players are lost (§3) |
+| `FLEET_PLACEMENT` | waiting | `GAME_START` was sent | Validate each `PLACE_FLEET`. Store a valid layout, stop that player's timer, and reply `FLEET_ACCEPTED` (`opponent_ready: false` for the 1st layout, `true` for the 2nd). Reject an invalid one with `INVALID_PLACEMENT` (the timer keeps running). A `MOVE` or a 2nd `PLACE_FLEET` gets `WRONG_PHASE` | `PLAYER_TURN` once both layouts are stored, with `active_player` set to `Player_1`, a `STATE_UPDATE` to each player, and the turn timer started. `GAME_OVER` or `CLEANUP` if players are lost (#3) |
+| `PLAYER_TURN` | waiting | Both fleets stored, or `CHECK_WIN` found ships left, or `EVALUATE_MOVE` rejected a shot | Wait for a `MOVE` from `active_player`, whose turn timer is running. A `MOVE` from the other player gets `OUT_OF_TURN` | `EVALUATE_MOVE` on a `MOVE` from the active player. `GAME_OVER` or `CLEANUP` if players are lost (#3) |
 | `EVALUATE_MOVE` | transient | The active player's `MOVE` passed the shape checks | Check that the cell is on the board (`INVALID_COORD`) and not already fired at by this player (`ALREADY_FIRED`). For a valid shot, stop the turn timer, resolve it as `HIT`, `MISS`, or `SUNK`, and mark it on the defender's board and the shooter's tracking grid | `CHECK_WIN` on a valid shot. `PLAYER_TURN` on a rejected one: same active player, timer still running |
 | `CHECK_WIN` | transient | A valid shot was resolved | Count the defender's unhit ship cells | `GAME_OVER` if none are left (`winner` is the shooter, reason `FLEET_DESTROYED`). Otherwise flip `active_player`, send each player a `STATE_UPDATE`, start a new turn timer, and return to `PLAYER_TURN` |
 | `GAME_OVER` | waiting | The defender's fleet was destroyed, or one player was lost | Send each reachable player `GAME_OVER` with their own view. Stop reading from both sockets and discard anything that arrives. Close each socket once its send buffer is empty | `CLEANUP` once both sockets are closed |
@@ -165,4 +165,4 @@ The session holds one `active_player` field, and only the server reads or writes
 2. **Whose turn it is.** In `PLAYER_TURN`, a `MOVE` whose sender is not `active_player` gets `OUT_OF_TURN` and changes nothing.
 3. **When the turn changes.** `active_player` is flipped only in `CHECK_WIN`, after a valid shot that did not end the game. A rejected shot never flips it, so a mistyped coordinate does not cost the player their turn.
 4. **How clients learn it.** Every `STATE_UPDATE` carries `active_player`. A client only prompts for a shot when that field names it, but that is for usability. The enforcement is entirely on the server, so a modified client still cannot fire out of turn.
-5. **How long a turn can last.** Only `active_player` has a running turn timer. If it reaches 500 s without a valid `MOVE`, that player is lost (§3) and the opponent wins by forfeit.
+5. **How long a turn can last.** Only `active_player` has a running turn timer. If it reaches 500 s without a valid `MOVE`, that player is lost (#3) and the opponent wins by forfeit.

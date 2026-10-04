@@ -178,9 +178,9 @@ The client does not send a ship's length. The server looks it up from the fleet 
    - every cell of every ship is on the board
    - no 2 ships share a cell
 2. If any check fails, reply `ERROR` (`INVALID_PLACEMENT`). The player stays in fleet placement and can send a corrected `PLACE_FLEET`.
-3. If the layout is valid, store it. The server wont send an acknowledgment and just show waiting for simplicity. The client shows that it is waiting for the opponent on its own until the next `STATE_UPDATE`.
+3. If the layout is valid, store it, stop that player's placement timer, and reply `FLEET_ACCEPTED` (see below).
 4. A layout is final once accepted. Another `PLACE_FLEET` from a player whose valid layout is already stored is rejected with `ERROR` (`WRONG_PHASE`).
-5. Once both players have a valid layout, the game moves to turns with `Player_1` as the active player, and the server sends each player a `STATE_UPDATE`.
+5. Once both players have a valid layout (the 2nd `FLEET_ACCEPTED` has `opponent_ready: true`), the game moves to turns with `Player_1` as the active player, and the server sends each player a `STATE_UPDATE`.
 
 ```json
 {
@@ -194,6 +194,45 @@ The client does not send a ship's length. The server looks it up from the fleet 
       { "name": "Submarine",  "row": 7, "col": 1, "orientation": "V" },
       { "name": "Destroyer",  "row": 9, "col": 8, "orientation": "H" }
     ]
+  },
+  "timestamp": 1727000010
+}
+```
+
+### `FLEET_ACCEPTED`
+
+- **Direction:** Server -> Client
+- **Purpose:** The server's reply to a valid `PLACE_FLEET`. It confirms that the layout passed every check and is now stored, so the client knows its fleet is final and no `ERROR` is coming for it. Without it, the client could not tell "accepted" apart from "not checked yet". It is sent only to the player whose layout was accepted.
+
+**Payload:**
+
+| Field            | Type    | Required | Description |
+| ---------------- | ------- | -------- | ----------- |
+| `opponent_ready` | boolean | yes      | `false`: the opponent has no accepted layout yet, so this player waits. `true`: this was the 2nd layout accepted, so turns begin now |
+
+The accepted layout is not sent back. The client already knows what it sent, and the first `STATE_UPDATE` shows the board as the server stored it.
+
+**When it is sent:**
+
+- **1st player to place:** gets `FLEET_ACCEPTED` with `opponent_ready: false`, then no further game messages until the opponent's layout is accepted (or the game ends early, see #5).
+- **2nd player to place:** gets `FLEET_ACCEPTED` with `opponent_ready: true`. In the same event-loop step, the server sends each player its first `STATE_UPDATE`. So the 2nd player receives `FLEET_ACCEPTED` and then `STATE_UPDATE` right after it, and the 1st player receives only the `STATE_UPDATE`.
+
+`FLEET_ACCEPTED` is always queued before that `STATE_UPDATE` on the same connection, and TCP keeps bytes in order, so a client never sees the `STATE_UPDATE` first.
+
+**Client handling:**
+
+1. Stop the placement prompt. The fleet is final, and another `PLACE_FLEET` would get `ERROR` (`WRONG_PHASE`).
+2. If `opponent_ready` is `false`, show that it is waiting for the opponent to place their fleet.
+3. If `opponent_ready` is `true`, show that the game is starting. The first `STATE_UPDATE` follows immediately.
+
+The example below is the reply to `Player_1`'s `PLACE_FLEET` above, sent before `Player_2` has placed:
+
+```json
+{
+  "msg_type": "FLEET_ACCEPTED",
+  "player_id": "SERVER",
+  "payload": {
+    "opponent_ready": false
   },
   "timestamp": 1727000010
 }
@@ -252,7 +291,7 @@ A rejected `MOVE` changes no game state and does not use up the turn, so the pla
 - **Purpose:** Tells a player the current state of the game. The server builds a separate view for each player and sends it only to that player. It is never broadcast identically, and a player never receives the opponent's ship positions.
 - **When it is sent:** once when turns begin (after both fleets are placed), and after every valid shot that does not end the game. A shot that ends the game gets `GAME_OVER` instead.
 
-There is no `phase` field. The message type already tells the client which phase it is in: `GAME_START` means fleet placement, `STATE_UPDATE` means turns, and `GAME_OVER` means the game is over.
+There is no `phase` field. The message type already tells the client which phase it is in: `GAME_START` means fleet placement, `FLEET_ACCEPTED` means this player's fleet is placed and final, `STATE_UPDATE` means turns, and `GAME_OVER` means the game is over.
 
 **Payload:**
 
@@ -490,7 +529,7 @@ The shape checks behind `MALFORMED` run first, before any game rule is checked.
 
 | Code                | Sent in response to | Condition                                                                                                      | Connection after |
 | ------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `MALFORMED`         | any message         | Invalid JSON; a missing or wrong-type envelope or payload field (including a boolean, float, or string where an integer is required, see #1); a `null` `player_id` on anything but `CONNECT`; a non-null `player_id` on `CONNECT`; a `player_id` that does not match the socket; an unknown `msg_type`; or a server-only type (`LOBBY_WAIT`, `GAME_START`, `STATE_UPDATE`, `ERROR`, `GAME_OVER`) sent by a client | stays open       |
+| `MALFORMED`         | any message         | Invalid JSON; a missing or wrong-type envelope or payload field (including a boolean, float, or string where an integer is required, see #1); a `null` `player_id` on anything but `CONNECT`; a non-null `player_id` on `CONNECT`; a `player_id` that does not match the socket; an unknown `msg_type`; or a server-only type (`LOBBY_WAIT`, `GAME_START`, `FLEET_ACCEPTED`, `STATE_UPDATE`, `ERROR`, `GAME_OVER`) sent by a client | stays open       |
 | `FRAME_TOO_LARGE`   | any message         | More than 64 KB arrived without a newline                                                                      | **closed**       |
 | `VERSION_MISMATCH`  | `CONNECT`           | `version` is not a protocol version the server speaks (currently only `"0.0"`)                                  | **closed**       |
 | `ROOM_FULL`         | `CONNECT`           | Both player slots are already taken                                                                            | **closed**       |
@@ -629,3 +668,156 @@ This rule will only work if the newline byte can never show up inside a message'
 - **Splitting on bytes is safe even for UTF-8.** In UTF-8, every byte of a multi-byte character is `0x80` or higher, so `0x0A` can only ever mean a real newline. The receiver can split on `0x0A` first and decode each message afterward without cutting a character in half.
 
 When I write the client and server and codevelop with Claude, these are the rules that have been written and agreed on in order to ensure both the client and server run correctly and properly read eachothers messages.
+
+### Back-to-Back Messages on the Wire Example
+
+#### The setup, in order
+
+Before looking at raw bytes, this is the order messages travel in while a game is set up. Every step waits for the one before it: a client only sends `PLACE_FLEET` after `GAME_START`, and nobody can send a `MOVE` until both fleets are accepted. The server enforces this, so a message sent too early gets `ERROR` (`WRONG_PHASE`) and changes nothing.
+
+**Mermaid link:** [Open my diagram in the Mermaid Live Editor]() (Way easier to see the whole state diagram this way)
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client 1 (alice)
+    participant S as Server
+    participant C2 as Client 2 (bob)
+
+    C1->>S: CONNECT (player_id null)
+    S->>C1: LOBBY_WAIT (assigned Player_1, 1 connected)
+    Note over C1,S: Player_1 waits for an opponent
+    C2->>S: CONNECT (player_id null)
+    S->>C2: LOBBY_WAIT (assigned Player_2, 2 connected)
+    S->>C1: GAME_START (opponent bob)
+    S->>C2: GAME_START (opponent alice)
+    Note over C1,C2: Fleet placement, both placement timers start
+    C1->>S: PLACE_FLEET
+    S->>C1: FLEET_ACCEPTED (opponent_ready false)
+    opt Player_1 tries to fire early
+        C1->>S: MOVE
+        S->>C1: ERROR WRONG_PHASE
+    end
+    C2->>S: PLACE_FLEET
+    S->>C2: FLEET_ACCEPTED (opponent_ready true)
+    S->>C1: STATE_UPDATE (active_player Player_1)
+    S->>C2: STATE_UPDATE (active_player Player_1)
+    Note over C1,C2: Turns begin, MOVE is accepted from now on
+```
+
+#### One stream, byte by byte (Back-to-Back Wire Example)
+
+A TCP connection carries two separate byte streams, one in each direction. TCP keeps the bytes in order inside each stream, but the stream itself records nothing else: not the time between messages, and not what traveled the other way in between. So the example below shows one stream on its own: everything the server sends to `Player_2` (`bob`) in the diagram above. Inside the stream, messages follow each other with nothing in between, so the byte right after a `\n` is the `{` that starts the next message.
+
+Some of these messages really are written at the same moment. `LOBBY_WAIT` and `GAME_START` are written in the same event-loop step right after `Player_2` joins, and so are `FLEET_ACCEPTED` and `STATE_UPDATE` right after `Player_2`'s fleet is accepted (each pair shares a `timestamp`). `Player_2` placed second, so its `FLEET_ACCEPTED` has `opponent_ready: true`, and its board is the fleet revealed in the `GAME_OVER` example in #2.
+
+**The full stream, exactly as sent.** These are 1009 bytes in a row, this was generated with a python script created by claude (scroll right to see the whole stream):
+
+```text
+{"msg_type":"LOBBY_WAIT","player_id":"SERVER","payload":{"assigned_id":"Player_2","players_connected":2},"timestamp":1727000003}\n{"msg_type":"GAME_START","player_id":"SERVER","payload":{"opponent_name":"alice","board_size":10,"fleet":[{"name":"Carrier","length":5},{"name":"Battleship","length":4},{"name":"Cruiser","length":3},{"name":"Submarine","length":3},{"name":"Destroyer","length":2}]},"timestamp":1727000003}\n{"msg_type":"FLEET_ACCEPTED","player_id":"SERVER","payload":{"opponent_ready":true},"timestamp":1727000015}\n{"msg_type":"STATE_UPDATE","player_id":"SERVER","payload":{"active_player":"Player_1","your_board":[".........S","......SS.S",".........S",".........S","....SSS...","..........",".......S..",".......S..",".......S..","SSSSS....."],"tracking_grid":["..........","..........","..........","..........","..........","..........","..........","..........","..........",".........."],"last_shot":null,"ships_remaining":{"Player_1":5,"Player_2":5},"shots_fired":0},"timestamp":1727000015}\n
+```
+
+**The same stream, but readable.** Below, each message is put on its own line and shortened with `...` so it fits on screen. This is close to what Wireshark's Follow TCP Stream shows, since every `\n` starts a new line there. The numbers on the left are the bytes each message takes up in the stream.
+
+```text
+bytes    0 to  128:  {"msg_type":"LOBBY_WAIT","player_id":"SERVER","payload":{"assigned_id":"Player_2",...},...}\n
+bytes  129 to  417:  {"msg_type":"GAME_START","player_id":"SERVER","payload":{"opponent_name":"alice",...},...}\n
+bytes  418 to  525:  {"msg_type":"FLEET_ACCEPTED","player_id":"SERVER","payload":{"opponent_ready":true},...}\n
+bytes  526 to 1008:  {"msg_type":"STATE_UPDATE","player_id":"SERVER","payload":{"active_player":"Player_1",...},...}\n
+```
+
+**Where one message ends and the next begins.** This is a close-up of bytes 125 to 131, the end of `LOBBY_WAIT` and the start of `GAME_START`:
+
+```text
+byte:  125  126  127  128  129  130  131
+char:    0    3    }   \n    {    "    m
+hex:    30   33   7D   0A   7B   22   6D
+```
+
+Byte 128 is the `0x0A` that ends `LOBBY_WAIT`, and byte 129 is the `{` that starts `GAME_START`. There is nothing in between. The other two boundaries (bytes 417 and 418, bytes 525 and 526) look the same: a `}`, then `0x0A`, then `{`.
+
+| # | Message | Size on the wire | First byte | Last byte (the `\n`) |
+| - | ------- | ---------------- | ---------- | -------------------- |
+| 1 | `LOBBY_WAIT` | 129 bytes | 0 | 128 |
+| 2 | `GAME_START` | 289 bytes | 129 | 417 |
+| 3 | `FLEET_ACCEPTED` | 108 bytes | 418 | 525 |
+| 4 | `STATE_UPDATE` | 483 bytes | 526 | 1008 |
+
+The byte positions are counted from the start of the stream. The receiver does not know them ahead of time but does not need to: it finds the end of each message by looking for the next `0x0A`.
+
+### Fragmentation: One Message Split Across Two `recv()` Calls
+
+TCP can hand a message to the receiver in pieces. The split can fall at any byte, and `recv()` returns whatever has arrived so far. long messages like `STATE_UPDATE` are likely to be split, so the receiver must ALWAYS handle it.
+
+This example is the server receiving the 94 byte `MOVE` from #2 from `Player_1`, split after its 40th byte.
+
+**1st `recv()` returns 40 bytes:**
+
+```text
+{"msg_type":"MOVE","player_id":"Player_1
+```
+
+- These 40 bytes are added to `Player_1`'s receive buffer, which was empty.
+- The buffer has no `0x0A`, so it does not hold a complete message yet, and nothing is parsed. Calling `json.loads` on these bytes would result in a (`Unterminated string`), which is why the receiver never parses before it sees a `0x0A`.
+- The 40 bytes stay in the buffer. The event loop moves on to other sockets, nothing waits on this one. `Player_1`'s turn timer keeps running.
+
+**2nd `recv()` returns the other 54 bytes:**
+
+```text
+","payload":{"row":1,"col":6},"timestamp":1727000020}\n
+```
+
+- These 54 bytes are added to the end of the buffer, which now holds all 94 bytes of the `MOVE`.
+- The first `0x0A` is at pos 93 in the buffer, the last byte. Bytes 0 to 92 are split off and parsed as one `MOVE`, and the `0x0A` is dropped.
+- Nothing is left after the `0x0A`, so the buffer is emptied, ready for the next message.
+
+| After | Bytes in the buffer | `0x0A` in the buffer? | Messages parsed | Bytes left in the buffer |
+| ----- | ------------------- | --------------------- | --------------- | ------------------------ |
+| 1st `recv()` | 40 | no | none | 40 |
+| 2nd `recv()` | 94 | yes, at position 93 | 1 (`MOVE`) | 0 |
+
+**Only the `0x0A` decides.** The split could fall one byte later right before the newline. The 1st `recv()` would then return all 93 bytes of JSON. `json.loads` could parse this successfully. However, the receiver still does not parse it, because there is no `0x0A` yet. The receiver never tries parsing to guess whether a message is complete: a message is complete only when its `0x0A` has arrived.
+
+### Coalescing: Two Messages in One `recv()` Call
+
+This is the opposite of fragmentation. When the sender writes two messages close together, TCP may deliver them together, and one `recv()` returns both. This is most likely when the server writes two messages in the same event-loop step.
+
+This example is `Player_2`'s client right after its fleet is accepted. The server writes `FLEET_ACCEPTED` and `STATE_UPDATE` in the same step (bytes 418 to 1008 of the stream above), and one `recv()` returns all 591 bytes. Shortened with `...` (the full bytes are in the stream above):
+
+```text
+{"msg_type":"FLEET_ACCEPTED",...,"payload":{"opponent_ready":true},...}\n{"msg_type":"STATE_UPDATE",...,"shots_fired":0},...}\n
+```
+
+The receiver adds the 591 bytes to its buffer, which was empty, then keeps splitting off messages until no `0x0A` is left. Each position is counted from the start of the buffer at that pass:
+
+| Pass | First `0x0A` in the buffer | Message parsed | Bytes left in the buffer |
+| ---- | -------------------------- | -------------- | ------------------------ |
+| 1 | position 107 | `FLEET_ACCEPTED` | 483 |
+| 2 | position 482 | `STATE_UPDATE` | 0 |
+| 3 | none | none, stop and wait for the next `recv()` | 0 |
+
+The client handles them in the order they arrived: first it shows that the game is starting (`opponent_ready: true`), then it draws both boards from the `STATE_UPDATE`.
+
+**Why it must loop.** Suppose the receiver parsed only one message per `recv()`. It would handle `FLEET_ACCEPTED` and leave the whole `STATE_UPDATE` sitting in the buffer. The server sends `Player_2` nothing more until `Player_1` fires, so no new bytes arrive, `recv()` is not called again, and `Player_2` would not see its board or learn that turns have begun until then. The receiver must parse every complete message in its buffer before it waits for more bytes.
+
+### Both at Once: A `recv()` That Ends Mid-Message
+
+Most of the time a `recv()` does a bit of both: it finishes one message and starts the next. This example is `Player_2`'s client right after it joins. `LOBBY_WAIT` and `GAME_START` (bytes 0 to 417 of the stream above) arrive as one `recv()` of 200 bytes and then one of 218 bytes.
+
+**1st `recv()` returns 200 bytes:** all 129 bytes of `LOBBY_WAIT`, then the first 71 bytes of `GAME_START`. Shortened with `...`:
+
+```text
+{"msg_type":"LOBBY_WAIT",...,"timestamp":1727000003}\n{"msg_type":"GAME_START","player_id":"SERVER","payload":{"opponent_name
+```
+
+**2nd `recv()` returns the other 218 bytes of `GAME_START`.** Shortened with `...`:
+
+```text
+":"alice","board_size":10,"fleet":[...]},"timestamp":1727000003}\n
+```
+
+| After | Bytes in the buffer | Messages parsed | Bytes left in the buffer |
+| ----- | ------------------- | --------------- | ------------------------ |
+| 1st `recv()` | 200 | 1: `LOBBY_WAIT` (`0x0A` at position 128) | 71, the start of `GAME_START` |
+| 2nd `recv()` | 71 + 218 = 289 | 1: `GAME_START` (`0x0A` at position 288) | 0 |
+
+The same loop handled all three cases: one message in pieces, two messages together, and a mix of both. The receiver never needs to know which case it is in. It adds the new bytes to the buffer, parses every message that ends in a `0x0A`, and keeps whatever is left for the next `recv()`.
