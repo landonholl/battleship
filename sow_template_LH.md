@@ -27,7 +27,7 @@
 
 - **Turn Mechanics:** The server is the only authority on whose turn it is. After both players finish ship placement, the server assigns the first turn to Player 1 and stores the active player ID in the game state. When a `MOVE` arrives, the server compares the senders player ID to the active player ID. If they do not match, the move is rejected with an `ERROR` message and the state is left unchanged, so a client cannot fire out of turn or fire twice in a row. If they do match, the server validates the position (on the board, not already fired at by that player), resolves the shot, flips the active player ID to the opponent, and broadcasts a `STATE_UPDATE` telling both clients whose turn it is now. Clients only display a prompt for input when the update names them as the active player, but the enforcement is server side so a modified client still cannot take an extra turn.
 - **Victory Condition:** A player wins by sinking all five of the opponents ships. The server tracks the remaining unhit cells for every ship, and after each shot it checks whether the defending player has any ship cells left. When that count reaches zero, the server moves to `GAME_OVER` and broadcasts the result to both clients with the winners player ID and a final tally of shots taken and hits landed. No further moves are accepted after that point.
-- **Draw/Tie Condition:** A true draw is not possible in Battleship. Players alternate single shots, so only the player who just fired can reduce the opponents fleet to zero, and the win check runs immediately after each shot. That means both fleets can never be eliminated on the same turn. The game instead ends early in two non-win cases: if a client disconnects or times out, the server sends `GAME_OVER` to the remaining player with a forfeit result naming the disconnected player; if both clients are lost, the server discards the session during `CLEANUP` and records no winner.
+- **Draw/Tie Condition:** A true draw is not possible in Battleship. Players alternate single shots, so only the player who just fired can reduce the opponents fleet to zero, and the win check runs immediately after each shot. That means both fleets can never be eliminated on the same turn. The game instead ends early in two non-win cases: if a client disconnects or times out during turns, the server sends `GAME_OVER` to the remaining player as the winner with reason `OPPONENT_DISCONNECTED`; if a client disconnects during fleet placement, no shots have been fired, so the server sends `GAME_OVER` with no winner and reason `OPPONENT_DISCONNECTED` and the game resets to `WAITING_FOR_PLAYERS`; if both clients are lost, the server discards the session during `CLEANUP` and records no winner.
 
 ---
 
@@ -48,13 +48,14 @@ Every message, in both directions, uses the same envelope: `msg_type` (string), 
 #### Message Types:
 
 1. `CONNECT` (Client -> Server): Request to join the game room. Payload carries a display name and the protocol version the client speaks.
-2. `LOBBY_WAIT` (Server -> Client): Acknowledges the join, assigns the permanent `player_id` to (`Player_1` / `Player_2`) in join order, so the first client to connect becomes `Player_1` and the second becomes `Player_2`, and reports that the server is waiting for the second player.
+2. `LOBBY_WAIT` (Server -> Client): Acknowledges the join, assigns the permanent `player_id` for the current game (`Player_1` / `Player_2`) in join order, so the first client to connect becomes `Player_1` and the second becomes `Player_2`, and reports that the server is waiting for the second player.
 3. `GAME_START` (Server -> Clients): Both players connected. Payload contains the opponents display name, the board dimensions (10x10), and the fleet manifest (ship name and length for all five ships). Both clients move into fleet placement on receipt.
 4. `PLACE_FLEET` (Client -> Server): Submits all five ship placements at once, each as ship name, start coordinate, and orientation (`H` or `V`). The server validates that every ship is in bounds, matches its required length, and does not overlap another ship. An invalid layout is answered with `ERROR` and the player stays in placement.
 5. `MOVE` (Client -> Server): Fire one shot at a coordinate on the opponents grid. This is only allowed when the sender is the active player and both fleets are placed.
-6. `STATE_UPDATE` (Server -> Client): Sent individually to each player, **NOT** broadcast identically. Payload contians the current phase, and the active player ID, and the senders own board with incoming shots marked, and the senders tracking grid of its own shots, and the result of the most recent shot (`HIT`, `MISS`, or `SUNK`, plus the ship name when sunk), and the count of ships still afloat on each side. A player never receives the opponents ship positions, only the outcome of shots already taken.
-7. `GAME_OVER` (Server -> Clients): Terminal notification. Payload carries the winning `player_id`, a `reason` (`FLEET_DESTROYED` or `FORFEIT`), per player statistics (shots fired, hits, accuracy), and a final showing of both fleets.
+6. `STATE_UPDATE` (Server -> Client): Sent individually to each player, **NOT** broadcast identically. Payload contains the active player ID, and the senders own board with incoming shots marked, and the senders tracking grid of its own shots, and the result of the most recent shot (`HIT`, `MISS`, or `SUNK`, plus the ship name when sunk), and the count of ships still afloat on each side. A player never receives the opponents ship positions, only the outcome of shots already taken.
+7. `GAME_OVER` (Server -> Clients): Terminal notification. Payload carries the winning `player_id` (or `null` when there is no winner), a `reason` (`FLEET_DESTROYED` or `OPPONENT_DISCONNECTED`), per player statistics (shots fired, hits, accuracy), and a final showing of both fleets.
 8. `ERROR` (Server -> Client): Rejection of a client message. Payload carries a machine readable `code` and a human readable `message`. The error is sent only to the offending client.
+9. `DISCONNECT` (Client -> Server): The player is quitting on purpose. The server wipes the sender's `player_id` and closes its socket. If the opponent is still connected, they receive `GAME_OVER` with reason `OPPONENT_DISCONNECTED`: as the winner during turns, or with no winner during fleet placement.
 
 #### Error Codes:
 
@@ -91,8 +92,8 @@ Each grid is a list of 10 strings of 10 characters. On a players own board: `.` 
     "ships": [
       { "name": "Carrier",    "row": 0, "col": 0, "orientation": "H" },
       { "name": "Battleship", "row": 2, "col": 3, "orientation": "V" },
-      { "name": "Cruiser",    "row": 5, "col": 1, "orientation": "H" },
-      { "name": "Submarine",  "row": 7, "col": 4, "orientation": "V" },
+      { "name": "Cruiser",    "row": 6, "col": 5, "orientation": "H" },
+      { "name": "Submarine",  "row": 7, "col": 1, "orientation": "V" },
       { "name": "Destroyer",  "row": 9, "col": 8, "orientation": "H" }
     ]
   },
@@ -105,7 +106,6 @@ Each grid is a list of 10 strings of 10 characters. On a players own board: `.` 
   "msg_type": "STATE_UPDATE",
   "player_id": "SERVER",
   "payload": {
-    "phase": "PLAYER_TURN",
     "active_player": "Player_2",
     "your_board": [
       "SSSSS.....",
@@ -113,11 +113,11 @@ Each grid is a list of 10 strings of 10 characters. On a players own board: `.` 
       "...S......",
       "...S......",
       "...X......",
-      ".SSS.....O",
-      "..........",
-      "....S.....",
-      "....S.....",
-      "........SS"
+      "...S.....O",
+      ".....SSS..",
+      ".S........",
+      ".S........",
+      ".S......SS"
     ],
     "tracking_grid": [
       "..........",
@@ -128,7 +128,7 @@ Each grid is a list of 10 strings of 10 characters. On a players own board: `.` 
       "..........",
       "..........",
       "..........",
-      "..........",
+      "........O.",
       ".........."
     ],
     "last_shot": {
@@ -162,10 +162,10 @@ A `FLEET_PLACEMENT` state is needed  because Battleship has a setup phase before
 | `PLAYER_TURN`         | Both fleets placed, or the previous turn resolved | Send each player its own`STATE_UPDATE`, then block on a `MOVE` from the active player. A `MOVE` from the inactive player is rejected with `OUT_OF_TURN` and the state does not change                                                                                                                                      | `EVALUATE_MOVE` on a `MOVE` from the active player                                                                      |
 | `EVALUATE_MOVE`       | Valid sender                                      | Validate the coordinate (in bounds, not already fired at by this player), resolve the shot against the defender's hidden fleet as hit, miss, or sunk, and record it on both the defender's board and the shooter's tracking grid. An invalid coordinate returns`ERROR` and reverts to `PLAYER_TURN` without consuming the turn | `CHECK_WIN`                                                                                                               |
 | `CHECK_WIN`           | Shot resolved                                     | Test whether the defender has any unhit ship cells remaining                                                                                                                                                                                                                                                                       | `GAME_OVER` if the defending fleet is destroyed, otherwise `PLAYER_TURN` with the active player flipped to the opponent |
-| `GAME_OVER`           | Fleet destroyed, or a player disconnected         | Broadcast`GAME_OVER` with the winner, the `reason` (`FLEET_DESTROYED` or `FORFEIT`), final statistics, and the reveal of both fleets. Reject any further `MOVE`                                                                                                                                                          | `CLEANUP`                                                                                                                 |
+| `GAME_OVER`           | Fleet destroyed, or a player disconnected         | Broadcast`GAME_OVER` with the winner, the `reason` (`FLEET_DESTROYED` or `OPPONENT_DISCONNECTED`), final statistics, and the reveal of both fleets. Reject any further `MOVE`                                                                                                                                                          | `CLEANUP`                                                                                                                 |
 | `CLEANUP`             | Result delivered                                  | Close both client sockets, discard the session state, and either return to`INIT` for a new match or exit                                                                                                                                                                                                                         | `INIT` or process exit                                                                                                    |
 
-- **Disconnect Handling:** A client socket closing is detected in any state as an empty `recv`, and it is not a normal transition. From `WAITING_FOR_PLAYERS` or `FLEET_PLACEMENT` the server returns to `WAITING_FOR_PLAYERS` and waits for a player to reconnect, since no shots have been exchanged. From `PLAYER_TURN`, `EVALUATE_MOVE`, or `CHECK_WIN` the server goes directly to `GAME_OVER` and awards a win to the remaining player. If both clients are lost, the server goes straight to `CLEANUP` and records no winner.
+- **Disconnect Handling:** A client socket closing is detected in any state as an empty `recv`, and it is not a normal transition. From `WAITING_FOR_PLAYERS` the server wipes that player's ID and keeps waiting. From `FLEET_PLACEMENT` no shots have been exchanged, so the server sends the remaining player `GAME_OVER` with no winner and reason `OPPONENT_DISCONNECTED`, and returns to `WAITING_FOR_PLAYERS`; the remaining client re-`CONNECT`s automatically. From `PLAYER_TURN`, `EVALUATE_MOVE`, or `CHECK_WIN` the server goes directly to `GAME_OVER` and awards a win to the remaining player with reason `OPPONENT_DISCONNECTED`. If both clients are lost, the server goes straight to `CLEANUP` and records no winner.
 
 ---
 
