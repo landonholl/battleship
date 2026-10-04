@@ -48,7 +48,7 @@ Every message, in both directions, uses the same envelope: `msg_type` (string), 
 #### Message Types:
 
 1. `CONNECT` (Client -> Server): Request to join the game room. Payload carries a display name and the protocol version the client speaks.
-2. `LOBBY_WAIT` (Server -> Client): Acknowledges the join, assigns the permanent `player_id` to (`Player_1` / `Player_2`), and reports that the server is waiting for the second player.
+2. `LOBBY_WAIT` (Server -> Client): Acknowledges the join, assigns the permanent `player_id` to (`Player_1` / `Player_2`) in join order, so the first client to connect becomes `Player_1` and the second becomes `Player_2`, and reports that the server is waiting for the second player.
 3. `GAME_START` (Server -> Clients): Both players connected. Payload contains the opponents display name, the board dimensions (10x10), and the fleet manifest (ship name and length for all five ships). Both clients move into fleet placement on receipt.
 4. `PLACE_FLEET` (Client -> Server): Submits all five ship placements at once, each as ship name, start coordinate, and orientation (`H` or `V`). The server validates that every ship is in bounds, matches its required length, and does not overlap another ship. An invalid layout is answered with `ERROR` and the player stays in placement.
 5. `MOVE` (Client -> Server): Fire one shot at a coordinate on the opponents grid. This is only allowed when the sender is the active player and both fleets are placed.
