@@ -28,7 +28,7 @@ Unknown fields are ignored by the receiver so that hopefully the schema can grow
 
 - A client has no ID when it connects, so `player_id` is `null` on its 1st `CONNECT`.
 - The server stores the current player IDs and assigns one to the client in its `LOBBY_WAIT` reply. The 1st client to connect is `Player_1` and the 2nd is `Player_2`. The client uses the assigned ID in every message after that.
-- An ID belongs to one connection for one game. It is wiped when that player disconnects, or when the game ends and the server closes both connections (see §5), so ID assignment is done again for every game.
+- An ID belongs to one connection for one game. It is wiped when that player disconnects, or when the game ends and the server closes both connections (see #5), so ID assignment is done again for every game.
 - A game cannot start until both players have been assigned an ID.
 
 ### Player ID Validation
@@ -354,7 +354,7 @@ The example below is `Player_1`'s view after five shots, using the `PLACE_FLEET`
 - A rejected `MOVE` does not use up the player's turn.
 - Exceptions: after `ROOM_FULL`, `VERSION_MISMATCH`, or `FRAME_TOO_LARGE`, the server sends the `ERROR` and then closes the connection, since retrying cannot help. What this means for the opponent:
   - `ROOM_FULL` and `VERSION_MISMATCH` are only ever sent to a client with no seat (a seated client's `CONNECT` is rejected earlier with `WRONG_PHASE`), so a game in progress is not affected and the players get nothing.
-  - `FRAME_TOO_LARGE` can hit a seated player. Closing that player ends the game like any other disconnect: the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`), then both connections are closed and the server runs `CLEANUP` (§5, row 6).
+  - `FRAME_TOO_LARGE` can hit a seated player. Closing that player ends the game like any other disconnect: the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`), then both connections are closed and the server runs `CLEANUP` (#5, row 6).
 
 **Client handling:**
 
@@ -377,7 +377,7 @@ The example below is `Player_1`'s view after five shots, using the `PLACE_FLEET`
 ### `GAME_OVER`
 
 - **Direction:** Server -> each connected client
-- **Purpose:** The game has ended. Tells each player the result, the final stats, and both final boards. This is the last message of a game and the last message on the connection: the server closes the socket right after sending it (see §5).
+- **Purpose:** The game has ended. Tells each player the result, the final stats, and both final boards. This is the last message of a game and the last message on the connection: the server closes the socket right after sending it (see #5).
 - **Who gets it:** on a normal win, both players, each with their own view (like `STATE_UPDATE`). On a disconnect or timeout, only the remaining player.
 
 **Payload:**
@@ -459,7 +459,7 @@ The example below is `Player_1`'s view after sinking `Player_2`'s whole fleet in
 
 1. Wipe the sender's `player_id`.
 2. Close the sender's socket. The server sends no reply to the leaving client.
-3. If the opponent is still connected, the game ends (see §5). The opponent gets `GAME_OVER` with reason `OPPONENT_DISCONNECTED`:
+3. If the opponent is still connected, the game ends (see #5). The opponent gets `GAME_OVER` with reason `OPPONENT_DISCONNECTED`:
    - During fleet placement, no shots have been fired, so `winner` is `null`.
    - During turns, the remaining player wins by forfeit.
 
@@ -490,7 +490,7 @@ The shape checks behind `MALFORMED` run first, before any game rule is checked.
 
 | Code                | Sent in response to | Condition                                                                                                      | Connection after |
 | ------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `MALFORMED`         | any message         | Invalid JSON; a missing or wrong-type envelope or payload field (including a boolean, float, or string where an integer is required, see §1); a `null` `player_id` on anything but `CONNECT`; a non-null `player_id` on `CONNECT`; a `player_id` that does not match the socket; an unknown `msg_type`; or a server-only type (`LOBBY_WAIT`, `GAME_START`, `STATE_UPDATE`, `ERROR`, `GAME_OVER`) sent by a client | stays open       |
+| `MALFORMED`         | any message         | Invalid JSON; a missing or wrong-type envelope or payload field (including a boolean, float, or string where an integer is required, see #1); a `null` `player_id` on anything but `CONNECT`; a non-null `player_id` on `CONNECT`; a `player_id` that does not match the socket; an unknown `msg_type`; or a server-only type (`LOBBY_WAIT`, `GAME_START`, `STATE_UPDATE`, `ERROR`, `GAME_OVER`) sent by a client | stays open       |
 | `FRAME_TOO_LARGE`   | any message         | More than 64 KB arrived without a newline                                                                      | **closed**       |
 | `VERSION_MISMATCH`  | `CONNECT`           | `version` is not a protocol version the server speaks (currently only `"0.0"`)                                  | **closed**       |
 | `ROOM_FULL`         | `CONNECT`           | Both player slots are already taken                                                                            | **closed**       |
@@ -543,21 +543,22 @@ A game starts at `GAME_START` and ends in exactly one of the ways below. Every g
 | 4 | **Abrupt drop:** `ConnectionResetError` (TCP RST), `BrokenPipeError`, or `ConnectionAbortedError` on a read or write | Already gone; server closes its side | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
 | 5 | **Timeout:** no valid `PLACE_FLEET` within 500 s of `GAME_START`, or no valid `MOVE` within 500 s of the start of the player's turn (see Timeouts below). Catches silent drops (cut link, power loss) that never produce a FIN or RST | Closed, no message | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
 | 6 | **Oversized frame:** a seated player sends more than 64 KB without a newline | Gets `ERROR` (`FRAME_TOO_LARGE`), then is closed | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
-| 7 | **Both players lost:** both connections end in any of the ways in rows 2 to 6 (e.g. both time out during placement) | Already gone | Already gone | none recorded | no `GAME_OVER` is sent |
+| 7 | **Send buffer overflow:** more than 64 KB of server messages is waiting to be sent to a player because that player is not reading them (see Send Buffer Limit below) | Closed, no message | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
+| 8 | **Both players lost:** both connections end in any of the ways in rows 2 to 7 (e.g. both time out during placement) | Already gone | Already gone | none recorded | no `GAME_OVER` is sent |
 
-Rows 2 to 6 look the same to the remaining player. The server cannot reliably tell a quit from a crash, so all of them use one `reason`.
+Rows 2 to 7 look the same to the remaining player. The server cannot reliably tell a quit from a crash, so all of them use one `reason`.
 
 ### Not a game end
 
-- **Lobby disconnect:** `Player_1` leaves (any of rows 2 to 4) while waiting for an opponent, before `GAME_START`. There is no game yet, so nothing is sent. The server wipes the ID, frees the slot, and keeps waiting. The next client to connect becomes `Player_1`.
+- **Lobby disconnect:** `Player_1` is lost (any of rows 2 to 4, 6, or 7; row 5 does not apply because there is no lobby timer) while waiting for an opponent, before `GAME_START`. There is no game yet, so nothing is sent. The server wipes the ID, frees the slot, and keeps waiting. The next client to connect becomes `Player_1`.
 - **`VERSION_MISMATCH` and `ROOM_FULL`:** these close only a client that has no seat (a seated client's `CONNECT` is stopped earlier with `WRONG_PHASE`), so a game in progress is not affected.
-- **Rejected messages:** every other `ERROR` leaves the connection open and the game running (§3).
+- **Rejected messages:** every other `ERROR` leaves the connection open and the game running (#3).
 
 ### What each machine does
 
 **Server:**
 
-1. Send `GAME_OVER` to each player it can still reach (none in row 7).
+1. Send `GAME_OVER` to each player it can still reach (none in row 8).
 2. Stop reading from both client sockets. Any bytes that arrive after this point are discarded.
 3. Close each socket once its send buffer is empty, so `GAME_OVER` is handed to the OS before the FIN. Unregister both sockets from the selector.
 4. `CLEANUP`: discard the session (both boards and fleets, both player IDs, `active_player`, shot counts, timers).
@@ -565,7 +566,7 @@ Rows 2 to 6 look the same to the remaining player. The server cannot reliably te
 
 **Client that receives `GAME_OVER`:** shows the result, the stats, and both boards, closes its socket, and exits. The EOF that follows `GAME_OVER` is expected. To play again, the player runs the client again.
 
-**Client whose connection ends without `GAME_OVER`** (it was the one that timed out, sent an oversized frame, or lost the network, or the server itself went down): shows that the connection was lost and exits.
+**Client whose connection ends without `GAME_OVER`** (it was the one that timed out, sent an oversized frame, stopped reading, or lost the network, or the server itself went down): shows that the connection was lost and exits.
 
 ### Timeouts
 
@@ -581,3 +582,50 @@ A dead link with no FIN or RST looks like a slow player. Without a deadline the 
 - Only the player the game is waiting on is timed. The waiting player in `PLAYER_TURN`, and a player whose fleet is already accepted, can stay idle.
 - There is no timer in the lobby. `Player_1` can wait for an opponent as long as it likes.
 - The deadlines are kept by the server's own clock (`time.monotonic()`), not the envelope's `timestamp`, which the client controls. The event loop waits on the selector with a timeout so it wakes up to check deadlines even when no socket has data.
+
+### Send Buffer Limit
+
+**The potential issue it fixes.** The server never blocks on a write. Each outgoing message is added to that connection's send buffer, and the event loop writes it out whenever the socket can take more bytes. If a client stops reading, the operating system's buffer for that socket will fill up, the socket stops accepting bytes, and every new message for that client piles up in the server's send buffer. The receive buffer already has a 64 KB cap (`FRAME_TOO_LARGE`), but claude noticed that without a cap in both places, the send buffer could grow without limit. A client could use that on purpose: it sends tons of malformed lines and never reads the `ERROR` replies. Each line makes the server queue another `ERROR` (about 170 bytes), so the client could keep growing the server's memory until the server slows down or crashes, which would end the game for the other player too. This issue would probably never happen in practice because someone would most likley have to design a client to do this, but it is a good system to have in place for coverage and what should be considered anyways when writiing a network protocol.
+
+**The rule.** Each connection's send buffer is capped at 64 KB. This is the same limit as the receive buffer. Every time the server adds a message to a send buffer, it checks the buffer size. If it is over 64 KB, that player is lost (row 7 of the table above): the buffer is discarded, the socket is closed with no message, and the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`). No `ERROR` is sent, because the client is not reading. An unseated client that hits the cap is just closed, and the game is not affected.
+
+**Why a normal client should trigger it.** The largest message in this protocol is a `STATE_UPDATE`, about 550 bytes on the wire. A client that reads normally has at most a few messages waiting at any moment, around 1 KB. Reaching 64 KB takes more than 100 messages left unread, which only happens if the client has stopped reading on purpose or by a bug or something strange.
+
+---
+
+## 6. Message Framing
+
+TCP delivers a continuous stream of bytes, not separate messages. One message can arrive split across several `recv()` calls (fragmentation), and several messages can arrive together in one `recv()` (coalescing). The framing rule below should tell the receiver where each message ends, no matter how the bytes are grouped when they arrive. It is the same in both directions.
+
+### The Framing Rule
+
+Every message on the wire is built in three steps:
+
+1. Serialize the envelope with `json.dumps(message, separators=(",", ":"))`. This is compact JSON with no spaces and no `indent`.
+2. Encode the JSON text as UTF-8.
+3. Add ONLY one newline byte, `\n` (`0x0A`).
+
+```python
+frame = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
+```
+
+**The rule:** a message ends at the first `0x0A` byte after it starts. Every `0x0A` on the wire ends a message, and no other byte does. There is no length header and no other delimiter.
+
+Ex: the `MOVE` from #2 is sent as these 94 bytes (93 bytes of JSON, then the newline):
+
+```text
+{"msg_type":"MOVE","player_id":"Player_1","payload":{"row":1,"col":6},"timestamp":1727000020}\n
+```
+
+The last four bytes in hex are `32 30 7D 0A`: the `2` and `0` that end the timestamp, the closing `}`, and the newline that ends the frame. Here and in every wire example in this section, `\n` stands for that single `0x0A` byte, not the two characters `\` and `n`. I personally think this may get hard to read, especially in wireshark when responses get larger, but I will cross that road when I come to it.
+
+### Why `0x0A` Never Appears Inside a Message
+
+This rule will only work if the newline byte can never show up inside a message's JSON. There are 4 things that I think will make sure of that:
+
+- **`json.dumps` does not recognize newlines in strings.** A newline inside a string value is literally ignored and written as the two characters `\` and `n`. Ex: the string `"line one` + [newline] + `line two"` is sent as `"line one\nline two"`, all on one line.
+- **No pretty printing.** `json.dumps` only puts newlines between tokens when `indent` is set: `indent=2` this hopefully turns the `MOVE` above into about 9 lines with 8 newlines. The protocol does not allow `indent`. becasue using it is the one way to break the framing, so both client and server use the one serialize call above and nothing else.
+- **The wire is plain ASCII.** `json.dumps` keeps its default `ensure_ascii=True`, so any non-ASCII character is written as a `\uXXXX` escape. The only string a player types is `display_name`, which is har limited to `a` to `z`.
+- **Splitting on bytes is safe even for UTF-8.** In UTF-8, every byte of a multi-byte character is `0x80` or higher, so `0x0A` can only ever mean a real newline. The receiver can split on `0x0A` first and decode each message afterward without cutting a character in half.
+
+When I write the client and server and codevelop with Claude, these are the rules that have been written and agreed on in order to ensure both the client and server run correctly and properly read eachothers messages.
