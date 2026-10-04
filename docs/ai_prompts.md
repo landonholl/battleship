@@ -9,7 +9,7 @@ Claude (Claude Code in the IDE) is the only AI tool used on this project (SOW #4
 
 ## 1. Standing System Prompt
 
-Claude Code loads a project instruction file, `CLAUDE.md`, at the start of every session, so these rules apply before any task is given. `CLAUDE.md` is kept out of the repository (it lives in a local, gitignored folder), so its prompt is reproduced here word for word.
+Claude Code loads a project instruction file, `CLAUDE.md`, at the start of every session, so these rules apply before any task is given. `CLAUDE.md` is in .claude/ in the repo and its prompt is reproduced here.
 
 What it does:
 
@@ -176,7 +176,8 @@ Constraints:
      "O" into "."
 - Timestamps: 1727000003 for messages 1 and 2, 1727000015 for 3 and 4.
 - Print the stream as one line with each 0x0A shown as the two characters \n,
-  then a Markdown table with columns: Message, Size on the wire, First byte, Last byte
+  then a Markdown table with columns:
+  # | Message | Size on the wire | First byte | Last byte (the \n)
   with byte positions counted from 0.
 - Check that the board has 17 ship cells, that each frame contains exactly
   one 0x0A and only at the end, that json.loads of each frame gives back the
@@ -369,3 +370,25 @@ with a comment naming the FSM state or blueprint section it implements.
 Standard library only. Keep each function small enough for me to explain every
 line.
 ```
+
+## Checks on the AI's Output
+
+AI output on this project is not taken on trust. Each check below was run during Sprint 1 before the work was committed.
+
+**Review against the spec.** Every AI change is read against the blueprint right after it is made The receiver prompt claimed `BrokenPipeError` comes from `recv()`. The model copied the mistake into its draft, review caught it (it comes from writes), and both the draft and the prompt were corrected
+
+**Generated examples, not typed ones.** `tools/wire_example.py` builds the back-to-back stream with the real framing call and compares it to the blueprint byte for byte All 1009 bytes and every byte position in the table match. The script fails if the blueprint is ever edited out of step. this is for checking my work.
+
+**Shortened examples checked against real bytes.** Every `...` example in the fragmentation and coalescing sections is checked against the real serialized bytes Caught a missing `}` after the fleet array in one shortened `recv()` example
+
+**The receiver sketch, run as written.** The Python in "The Receiver Algorithm" is executed against 14 cases The fragmentation, coalescing, and mixed examples; the whole stream one byte per `recv()`; empty, invalid, and deeply nested frames (`RecursionError`); exactly 65,536 vs. 65,537 bytes; EOF; and stopping once a connection closes. All tests passed.
+
+**Socket claims tested on real sockets** `BlockingIOError` with no data, `b""` returned again and again after a close, and a closed socket reported readable 1000 times out of 1000 (the 100% CPU spin in #7). Sending to a closed peer raised `ConnectionAbortedError` on Windows, not `BrokenPipeError`, which is why the code catches all three
+
+**Diagrams rendered before commit.** The FSM diagram is checked in that it renders on github and that the links take the user to the correct Mermaid diagrams for each, so it the graders have and easier time navigating it.
+
+**Independent review.** A separate Claude agent, with no memory of the work, checks a change against the blueprint After `FLEET_ACCEPTED` was added by me. The claude found several things I forgot to add. It found the back to back example was missing that message, and a reference to a section. Both were fixed.
+
+**The prompts checked against the spec** The message types, directions, error codes, and states listed in the standing prompt are compared to the blueprint and FSM by script, so the prompt cannot contradict the spec
+
+**Changes made from Sprint 0 to Sprint 1.** During Sprint 1, I dropped automatic reconnects as too complex, set the 500 s timeouts, asked for an explicit reply to every setup step, which led to `FLEET_ACCEPTED`, and chose the 64 KB send buffer cap after the model pointed out the risk.

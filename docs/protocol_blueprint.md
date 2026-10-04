@@ -22,7 +22,7 @@ Unknown fields are ignored by the receiver so that hopefully the schema can grow
 
 - **Booleans are not integers.** `true` and `false` are rejected. This needs an explicit check in Python, where `bool` is a subclass of `int`: `isinstance(True, int)` is `True`, so `{"row": true}` would pass as row `1`. The validator checks `type(value) is int` instead.
 - **Floats are not integers.** `6.0` is rejected even though it equals `6`, because `json.loads` turns it into a `float`.
-- **Strings are not integers.** `"6"` is rejected becuase the server will not convert it.
+- **Strings are not integers.** `"6"` is rejected because the server will not convert it.
 
 ### Player ID Assignment
 
@@ -79,7 +79,7 @@ The server checks `player_id` on all client messages before acting on it:
 ### `LOBBY_WAIT`
 
 - **Direction:** Server -> Client
-- **Purpose:** The server's reply to a successful `CONNECT`. It gives the client its `player_id` for the current game and reports how many players are in the room. Both client gets thier ID this way.
+- **Purpose:** The server's reply to a successful `CONNECT`. It gives the client its `player_id` for the current game and reports how many players are in the room. Both client gets their ID this way.
 
 **Payload:**
 
@@ -134,7 +134,7 @@ The client hardcodes zero game rules. It draws the board and builds its placemen
   "msg_type": "GAME_START",
   "player_id": "SERVER",
   "payload": {
-    "opponent_name": "PLACEHOLDER",
+    "opponent_name": "placeholder",
     "board_size": 10,
     "fleet": [
       { "name": "Carrier",    "length": 5 },
@@ -259,7 +259,7 @@ Ex: `B7` becomes `row: 1, col: 6`, like in the sample below.
 
 **Server handling:**
 
-The checks run in this order. The 1st one that fails chooses wht error the player will see.
+The checks run in this order. The 1st one that fails chooses what error the player will see.
 
 1. If the game is not in turns (for example, during fleet placement), reply `ERROR` (`WRONG_PHASE`).
 2. If the sender is not the active player, reply `ERROR` (`OUT_OF_TURN`).
@@ -439,6 +439,8 @@ Each entry in `stats`:
 There is no accuracy field. The client computes it as `hits / shots` if it wants to show it, so the payload only carries integers. The per-player counts sit inside `stats` so they are not confused with the game-wide `shots_fired` in `STATE_UPDATE`.
 
 **Ending during fleet placement:** no shots have been fired, so `winner` is `null`, every `shots` and `hits` is `0`, and `opponent_board` is `null` even if the opponent had already placed a fleet.
+
+**There is no draw.** Players fire one shot at a time and the server checks for a win after every valid shot, so both fleets can never be sunk on the same turn. A `winner` of `null` never means a draw: it only happens when the game ends during fleet placement, before any shot is fired. A forfeit is `reason: "OPPONENT_DISCONNECTED"` with the remaining player as `winner` (#5).
 
 **Client handling:**
 
@@ -663,8 +665,8 @@ The last four bytes in hex are `32 30 7D 0A`: the `2` and `0` that end the times
 This rule will only work if the newline byte can never show up inside a message's JSON. There are 4 things that I think will make sure of that:
 
 - **`json.dumps` escapes in strings.** A newline inside a string value is written as the two characters `\` and `n`. Ex: the string `"line one` + [newline] + `line two"` is sent as `"line one\nline two"`, all on one line.
-- **No pretty printing.** `json.dumps` only puts newlines between tokens when `indent` is set: `indent=2` this hopefully turns the `MOVE` above into about 9 lines with 8 newlines. The protocol does not allow `indent`. becasue using it is the one way to break the framing, so both client and server use the one serialize call above and nothing else.
-- **The wire is plain ASCII.** `json.dumps` keeps its default `ensure_ascii=True`, so any non-ASCII character is written as a `\uXXXX` escape. The only string a player types is `display_name`, which is har limited to `a` to `z`.
+- **No pretty printing.** `json.dumps` only puts newlines between tokens when `indent` is set: `indent=2` this hopefully turns the `MOVE` above into about 9 lines with 8 newlines. The protocol does not allow `indent`. because using it is the one way to break the framing, so both client and server use the one serialize call above and nothing else.
+- **The wire is plain ASCII.** `json.dumps` keeps its default `ensure_ascii=True`, so any non-ASCII character is written as a `\uXXXX` escape. The only string a player types is `display_name`, which is hard limited to `a` to `z`.
 - **Splitting on bytes is safe even for UTF-8.** In UTF-8, every byte of a multi-byte character is `0x80` or higher, so `0x0A` can only ever mean a real newline. The receiver can split on `0x0A` first and decode each message afterward without cutting a character in half.
 
 When I write the client and server and codevelop with Claude, these are the rules that have been written and agreed on in order to ensure both the client and server run correctly and properly read eachothers messages.
@@ -675,7 +677,7 @@ When I write the client and server and codevelop with Claude, these are the rule
 
 Before looking at raw bytes, this is the order messages travel in while a game is set up. Every step waits for the one before it: a client only sends `PLACE_FLEET` after `GAME_START`, and nobody can send a `MOVE` until both fleets are accepted. The server enforces this, so a message sent too early gets `ERROR` (`WRONG_PHASE`) and changes nothing.
 
-**Mermaid link:** [Open my diagram in the Mermaid Live Editor]() (Way easier to see the whole state diagram this way)
+**Mermaid link:** [Open my diagram in the Mermaid Live Editor](https://mermaid.live/edit#pako:eNqVlGFv2kAMhv-KdZ86KaAmECj5UImGtJtEARG2ahNSdCQGTkvussulLUP89xmqAAW2qfmS-PTafuw3yZrFKkHmsQJ_lShj7Am-0Dyb6qkEunKujYhFzqUB3wZegJ8KpMCGK56KGD9dUoZbYYj6GfXFQs5RIQeuZmq2K1Npfbt2ext64A8Hg8CfwFWe8hXqSCQgyzTdtwxJ5tse9Id3d9-jp-4XkvKiEAuJCYzecmyLUGMlJcYGk33qQBkERXzUzKJWlRpeuDAFzJUGLkHluZIEuQdzPgDm_BvMsWj0c7BqpofuYxCFk-6YUisMqBZ13OOi8L0174bd5tyniAYIPsaM5BYVNstDDEZkqAsoDJl2asqo3_WD6L4fBJNT5t1h1PX9YDQJegecSCNPVjDnaXGAUrk5bN1ogQUYBXOhEZDrdFXpjns_Dr8Fx-dV42A8Ho7haTwcPESjz91wL0KZnHr3N37nv_xGl3jmE21-EkRfRz26kcmxEc8Yvb0W-_HOPPtQ0pl7k1LLAma4ENLarQREATyOMacXCeZaZSDVCyjJLLbQImHeltxi5GnGtyFbbytPmVmS3VPm0aPGpHytJVz_rMUqVXrKpnJD-fS9_lAqq0poVS6WzNs5abEyT7ip_hh7Ce0cta9KaZhnN3YlmLdmrxQ13Xqn1Wp3Wjdt12IrOunUGxQ6bsO5bjaabntjsd-7ftf1TmN7btvtm2bD7bidzR_R6nI5) (Way easier to see the whole state diagram this way)
 
 ```mermaid
 sequenceDiagram
