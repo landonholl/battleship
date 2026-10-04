@@ -18,11 +18,17 @@ Every message in both directions is a JSON object that uses the same 4 field env
 
 Unknown fields are ignored by the receiver so that hopefully the schema can grow in later sprints without breaking an older client.
 
+**Integer fields:** every field typed "integer" in this document (`timestamp`, `row`, `col`, and the rest) must be a JSON number with no fraction or exponent, such as `6`. Anything else is the wrong type and is rejected with `ERROR` (`MALFORMED`):
+
+- **Booleans are not integers.** `true` and `false` are rejected. This needs an explicit check in Python, where `bool` is a subclass of `int`: `isinstance(True, int)` is `True`, so `{"row": true}` would pass as row `1`. The validator checks `type(value) is int` instead.
+- **Floats are not integers.** `6.0` is rejected even though it equals `6`, because `json.loads` turns it into a `float`.
+- **Strings are not integers.** `"6"` is rejected becuase the server will not convert it.
+
 ### Player ID Assignment
 
 - A client has no ID when it connects, so `player_id` is `null` on its 1st `CONNECT`.
 - The server stores the current player IDs and assigns one to the client in its `LOBBY_WAIT` reply. The 1st client to connect is `Player_1` and the 2nd is `Player_2`. The client uses the assigned ID in every message after that.
-- IDs are wiped when a player disconnects and when a new game starts, so ID assignment is done again for every game.
+- An ID belongs to one connection for one game. It is wiped when that player disconnects, or when the game ends and the server closes both connections (see §5), so ID assignment is done again for every game.
 - A game cannot start until both players have been assigned an ID.
 
 ### Player ID Validation
@@ -46,13 +52,13 @@ The server checks `player_id` on all client messages before acting on it:
 
 | Field          | Type   | Required | Description                                         |
 | -------------- | ------ | -------- | --------------------------------------------------- |
-| `display_name` | string | yes      | The name shown to the opponent                      |
+| `display_name` | string | yes      | The name shown to the opponent. It will be bound to 1 to 20 characters, only `a` to `z` (lowercase English letters, no spaces). Anything else -> `MALFORMED`                      |
 | `version`      | string | yes      | The protocol version the client speaks, Ex: `"0.0"` |
 
 **Server handling:**
 
 1. If `player_id` is not `null`, reply `ERROR` (`MALFORMED`).
-2. If this socket already has an assigned ID (a `CONNECT` sent in the middle of a game), reply `ERROR` (`WRONG_PHASE`). A client only sends `CONNECT` again after `GAME_OVER`, when its ID has been wiped.
+2. If this socket already has an assigned ID (like a second `CONNECT` on the same connection), reply `ERROR` (`WRONG_PHASE`). A client sends `CONNECT` once per connection.
 3. If `version` is not a version the server speaks, reply `ERROR` (`VERSION_MISMATCH`) and close the connection.
 4. If the room has an open slot, assign the next ID in join order (`Player_1`, then `Player_2`), store the display name, and reply with `LOBBY_WAIT`.
 5. Once both IDs are assigned, send `GAME_START` to both players.
@@ -338,17 +344,22 @@ The example below is `Player_1`'s view after five shots, using the `PLACE_FLEET`
 | --------- | ------ | -------- | ------------------------------------------------------------------------------- |
 | `code`    | string | yes      | Machine readable reason. The client decides what to do based on this field |
 | `message` | string | yes      | Human readable explanation the client can show to the player                     |
+| `rejected_type` | string or null | yes | The `msg_type` of the message being rejected, so the client knows which of its messages failed. `null` when the server cannot name it: the message was not valid JSON, had no string `msg_type`, had a `msg_type` that is not a client message type, or was never a complete frame (`FRAME_TOO_LARGE`) |
+
+`rejected_type` only ever holds one of the four client message types (`CONNECT`, `PLACE_FLEET`, `MOVE`, `DISCONNECT`) or `null`. The server never echoes back an unknown string from the client.
 
 **Server handling:**
 
 - A rejected message does not change game state. The server keeps the connection open and stays in the same state, so the client can correct the problem and try again.
 - A rejected `MOVE` does not use up the player's turn.
-- Exceptions: after `ROOM_FULL`, `VERSION_MISMATCH`, or `FRAME_TOO_LARGE`, the server sends the `ERROR` and then closes the connection, since retrying cannot help.
+- Exceptions: after `ROOM_FULL`, `VERSION_MISMATCH`, or `FRAME_TOO_LARGE`, the server sends the `ERROR` and then closes the connection, since retrying cannot help. What this means for the opponent:
+  - `ROOM_FULL` and `VERSION_MISMATCH` are only ever sent to a client with no seat (a seated client's `CONNECT` is rejected earlier with `WRONG_PHASE`), so a game in progress is not affected and the players get nothing.
+  - `FRAME_TOO_LARGE` can hit a seated player. Closing that player ends the game like any other disconnect: the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`), then both connections are closed and the server runs `CLEANUP` (§5, row 6).
 
 **Client handling:**
 
 1. Show `message` to the player.
-2. Use `code` to decide what to do next, Ex: re prompt for a shot after `INVALID_COORD` or `ALREADY_FIRED`, or go back to the placement prompt after `INVALID_PLACEMENT`.
+2. Use `code` and `rejected_type` to decide what to do next, Ex: re prompt for a shot after a `MOVE` gets `INVALID_COORD` or `ALREADY_FIRED`, or go back to the placement prompt after a `PLACE_FLEET` gets `INVALID_PLACEMENT` or `MALFORMED`.
 
 ```json
 {
@@ -356,7 +367,8 @@ The example below is `Player_1`'s view after five shots, using the `PLACE_FLEET`
   "player_id": "SERVER",
   "payload": {
     "code": "OUT_OF_TURN",
-    "message": "It is not your turn. Waiting for Player_2."
+    "message": "It is not your turn. Waiting for Player_2.",
+    "rejected_type": "MOVE"
   },
   "timestamp": 1727000031
 }
@@ -365,8 +377,8 @@ The example below is `Player_1`'s view after five shots, using the `PLACE_FLEET`
 ### `GAME_OVER`
 
 - **Direction:** Server -> each connected client
-- **Purpose:** The game has ended. Tells each player the result, the final stats, and both final boards. This is the last message of a game.
-- **Who gets it:** on a normal win, both players, each with their own view (like `STATE_UPDATE`). On a disconnect, only the remaining player.
+- **Purpose:** The game has ended. Tells each player the result, the final stats, and both final boards. This is the last message of a game and the last message on the connection: the server closes the socket right after sending it (see §5).
+- **Who gets it:** on a normal win, both players, each with their own view (like `STATE_UPDATE`). On a disconnect or timeout, only the remaining player.
 
 **Payload:**
 
@@ -392,7 +404,7 @@ There is no accuracy field. The client computes it as `hits / shots` if it wants
 **Client handling:**
 
 1. Show the result, the stats, and both boards.
-2. Clear its `player_id` and automatically send `CONNECT` with `player_id: null` to rejoin the lobby for the next game.
+2. Close the socket and exit. The server closes its side right after `GAME_OVER`, so the EOF that follows is expected, not an error. To play again, the player runs the client again, which opens a new connection and sends a new `CONNECT`.
 
 The example below is `Player_1`'s view after sinking `Player_2`'s whole fleet in 20 shots (17 hits, 3 misses). `Player_2` fired 19 shots and hit 6 times.
 
@@ -446,13 +458,13 @@ The example below is `Player_1`'s view after sinking `Player_2`'s whole fleet in
 **Server handling:**
 
 1. Wipe the sender's `player_id`.
-2. If the opponent is still connected, send them `GAME_OVER` with reason `OPPONENT_DISCONNECTED`:
-   - During fleet placement, no shots have been fired, so `winner` is `null` and the game resets to `WAITING_FOR_PLAYERS`.
-   - During turns, the remaining player is the winner.
-   - In the lobby, before `GAME_START`, there is no opponent, so nothing is sent.
+2. Close the sender's socket. The server sends no reply to the leaving client.
+3. If the opponent is still connected, the game ends (see §5). The opponent gets `GAME_OVER` with reason `OPPONENT_DISCONNECTED`:
+   - During fleet placement, no shots have been fired, so `winner` is `null`.
+   - During turns, the remaining player wins by forfeit.
 
-   On `GAME_OVER` the remaining client re-`CONNECT`s automatically.
-3. Close the sender's socket. The server sends no reply to the leaving client.
+   The server then closes the opponent's connection too and runs `CLEANUP`.
+4. In the lobby, before `GAME_START`, there is no opponent and no game, so nothing is sent. The slot is freed and the server keeps waiting.
 
 A client that has not been assigned an ID yet does not send `DISCONNECT`, since `null` is only allowed on `CONNECT`. It just closes the socket, and the server treats that as a normal connection close.
 
@@ -478,7 +490,7 @@ The shape checks behind `MALFORMED` run first, before any game rule is checked.
 
 | Code                | Sent in response to | Condition                                                                                                      | Connection after |
 | ------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `MALFORMED`         | any message         | Invalid JSON; a missing or wrong-type envelope or payload field; a `null` `player_id` on anything but `CONNECT`; a non-null `player_id` on `CONNECT`; a `player_id` that does not match the socket; an unknown `msg_type`; or a server-only type (`LOBBY_WAIT`, `GAME_START`, `STATE_UPDATE`, `ERROR`, `GAME_OVER`) sent by a client | stays open       |
+| `MALFORMED`         | any message         | Invalid JSON; a missing or wrong-type envelope or payload field (including a boolean, float, or string where an integer is required, see §1); a `null` `player_id` on anything but `CONNECT`; a non-null `player_id` on `CONNECT`; a `player_id` that does not match the socket; an unknown `msg_type`; or a server-only type (`LOBBY_WAIT`, `GAME_START`, `STATE_UPDATE`, `ERROR`, `GAME_OVER`) sent by a client | stays open       |
 | `FRAME_TOO_LARGE`   | any message         | More than 64 KB arrived without a newline                                                                      | **closed**       |
 | `VERSION_MISMATCH`  | `CONNECT`           | `version` is not a protocol version the server speaks (currently only `"0.0"`)                                  | **closed**       |
 | `ROOM_FULL`         | `CONNECT`           | Both player slots are already taken                                                                            | **closed**       |
@@ -512,3 +524,60 @@ Every grid in `STATE_UPDATE` and `GAME_OVER` (`your_board`, `tracking_grid`, `op
 - When a ship is sunk, all of its cells change from `X` to `#` in the same update, on both the defender's board and the shooter's tracking grid. Because the client keeps no board state, this is how it knows which ships are finished.
 - `S` never appears on a `tracking_grid`, so a player never learns where an opponent's unhit ships are. Only `opponent_board` in `GAME_OVER` reveals them.
 - All five characters are plain ASCII, so each cell is one byte on the wire and JSON never escapes them. Labels like `A` to `J` and `1` to `10`, and any nicer display characters, are drawn by the client and never sent.
+
+---
+
+## 5. Game End and Cleanup
+
+A game starts at `GAME_START` and ends in exactly one of the ways below. Every game end works the same way: the server sends `GAME_OVER` to each player it can still reach, closes **both** client connections, runs `CLEANUP`, and goes back to `WAITING_FOR_PLAYERS` for the next game. No client connection survives from one game to the next.
+
+### Every way a game can end
+
+"Phase" is when the game ended: **placement** (after `GAME_START`, before both fleets are accepted) or **turns** (after both fleets are accepted).
+
+| # | How the game ends | Player who caused it | The other player | `winner` | `reason` |
+| - | ----------------- | -------------------- | ---------------- | -------- | -------- |
+| 1 | **Fleet destroyed:** a valid `MOVE` sinks the defender's last ship (turns only) | Shooter gets `GAME_OVER` (their view), then is closed | Defender gets `GAME_OVER` (their view), then is closed | the shooter | `FLEET_DESTROYED` |
+| 2 | **Graceful quit:** a player sends `DISCONNECT`, then closes (TCP FIN) | Closed, no reply | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
+| 3 | **Clean close without `DISCONNECT`:** `recv()` returns `b""` (EOF), e.g. the client process exited | Already gone; server closes its side | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
+| 4 | **Abrupt drop:** `ConnectionResetError` (TCP RST), `BrokenPipeError`, or `ConnectionAbortedError` on a read or write | Already gone; server closes its side | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
+| 5 | **Timeout:** no valid `PLACE_FLEET` within 500 s of `GAME_START`, or no valid `MOVE` within 500 s of the start of the player's turn (see Timeouts below). Catches silent drops (cut link, power loss) that never produce a FIN or RST | Closed, no message | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
+| 6 | **Oversized frame:** a seated player sends more than 64 KB without a newline | Gets `ERROR` (`FRAME_TOO_LARGE`), then is closed | Gets `GAME_OVER`, then is closed | placement: `null`; turns: the other player (forfeit) | `OPPONENT_DISCONNECTED` |
+| 7 | **Both players lost:** both connections end in any of the ways in rows 2 to 6 (e.g. both time out during placement) | Already gone | Already gone | none recorded | no `GAME_OVER` is sent |
+
+Rows 2 to 6 look the same to the remaining player. The server cannot reliably tell a quit from a crash, so all of them use one `reason`.
+
+### Not a game end
+
+- **Lobby disconnect:** `Player_1` leaves (any of rows 2 to 4) while waiting for an opponent, before `GAME_START`. There is no game yet, so nothing is sent. The server wipes the ID, frees the slot, and keeps waiting. The next client to connect becomes `Player_1`.
+- **`VERSION_MISMATCH` and `ROOM_FULL`:** these close only a client that has no seat (a seated client's `CONNECT` is stopped earlier with `WRONG_PHASE`), so a game in progress is not affected.
+- **Rejected messages:** every other `ERROR` leaves the connection open and the game running (§3).
+
+### What each machine does
+
+**Server:**
+
+1. Send `GAME_OVER` to each player it can still reach (none in row 7).
+2. Stop reading from both client sockets. Any bytes that arrive after this point are discarded.
+3. Close each socket once its send buffer is empty, so `GAME_OVER` is handed to the OS before the FIN. Unregister both sockets from the selector.
+4. `CLEANUP`: discard the session (both boards and fleets, both player IDs, `active_player`, shot counts, timers).
+5. Return to `WAITING_FOR_PLAYERS`. The listening socket on port 5000 stays open the whole time, so a new game starts as soon as two new clients connect. This is the reset for the next round.
+
+**Client that receives `GAME_OVER`:** shows the result, the stats, and both boards, closes its socket, and exits. The EOF that follows `GAME_OVER` is expected. To play again, the player runs the client again.
+
+**Client whose connection ends without `GAME_OVER`** (it was the one that timed out, sent an oversized frame, or lost the network, or the server itself went down): shows that the connection was lost and exits.
+
+### Timeouts
+
+A dead link with no FIN or RST looks like a slow player. Without a deadline the server would wait on that player forever and the opponent would be stuck. So the server gives each player a 500 second deadline whenever the game is waiting on them.
+
+| Timer | Starts | Stopped by | Not stopped or reset by |
+| ----- | ------ | ---------- | ----------------------- |
+| **Placement** (one per player) | When the server sends `GAME_START` | That player's valid `PLACE_FLEET` being accepted | A rejected `PLACE_FLEET` (`INVALID_PLACEMENT`, `MALFORMED`) |
+| **Turn** (active player only) | When a turn begins, Ex: the `STATE_UPDATE` naming that player as `active_player` is sent | A valid `MOVE` from the active player | A rejected `MOVE` (`INVALID_COORD`, `ALREADY_FIRED`, `MALFORMED`) |
+
+- When a timer reaches 500 s, the server treats that player as disconnected: row 5 of the table above. Its socket is closed with no message and the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`).
+- Rejected messages do not reset a timer, so a client cannot stall the game forever by sending bad moves.
+- Only the player the game is waiting on is timed. The waiting player in `PLAYER_TURN`, and a player whose fleet is already accepted, can stay idle.
+- There is no timer in the lobby. `Player_1` can wait for an opponent as long as it likes.
+- The deadlines are kept by the server's own clock (`time.monotonic()`), not the envelope's `timestamp`, which the client controls. The event loop waits on the selector with a timeout so it wakes up to check deadlines even when no socket has data.
