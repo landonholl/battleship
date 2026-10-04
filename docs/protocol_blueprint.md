@@ -69,7 +69,7 @@ The server checks `player_id` on all client messages before acting on it:
   "msg_type": "CONNECT",
   "player_id": null,
   "payload": {
-    "display_name": "PLACEHOLDER",
+    "display_name": "placeholder",
     "version": "0.0"
   },
   "timestamp": 1727000000
@@ -628,7 +628,7 @@ A dead link with no FIN or RST looks like a slow player. Without a deadline the 
 
 **The rule.** Each connection's send buffer is capped at 64 KB. This is the same limit as the receive buffer. Every time the server adds a message to a send buffer, it checks the buffer size. If it is over 64 KB, that player is lost (row 7 of the table above): the buffer is discarded, the socket is closed with no message, and the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`). No `ERROR` is sent, because the client is not reading. An unseated client that hits the cap is just closed, and the game is not affected.
 
-**Why a normal client should trigger it.** The largest message in this protocol is a `STATE_UPDATE`, about 550 bytes on the wire. A client that reads normally has at most a few messages waiting at any moment, around 1 KB. Reaching 64 KB takes more than 100 messages left unread, which only happens if the client has stopped reading on purpose or by a bug or something strange.
+**Why a normal client should NOT trigger it.** The largest message in this protocol is a `STATE_UPDATE`, about 550 bytes on the wire. A client that reads normally has at most a few messages waiting at any moment, around 1 KB. Reaching 64 KB takes more than 100 messages left unread, which only happens if the client has stopped reading on purpose or by a bug or something strange.
 
 ---
 
@@ -662,7 +662,7 @@ The last four bytes in hex are `32 30 7D 0A`: the `2` and `0` that end the times
 
 This rule will only work if the newline byte can never show up inside a message's JSON. There are 4 things that I think will make sure of that:
 
-- **`json.dumps` does not recognize newlines in strings.** A newline inside a string value is literally ignored and written as the two characters `\` and `n`. Ex: the string `"line one` + [newline] + `line two"` is sent as `"line one\nline two"`, all on one line.
+- **`json.dumps` escapes in strings.** A newline inside a string value is written as the two characters `\` and `n`. Ex: the string `"line one` + [newline] + `line two"` is sent as `"line one\nline two"`, all on one line.
 - **No pretty printing.** `json.dumps` only puts newlines between tokens when `indent` is set: `indent=2` this hopefully turns the `MOVE` above into about 9 lines with 8 newlines. The protocol does not allow `indent`. becasue using it is the one way to break the framing, so both client and server use the one serialize call above and nothing else.
 - **The wire is plain ASCII.** `json.dumps` keeps its default `ensure_ascii=True`, so any non-ASCII character is written as a `\uXXXX` escape. The only string a player types is `display_name`, which is har limited to `a` to `z`.
 - **Splitting on bytes is safe even for UTF-8.** In UTF-8, every byte of a multi-byte character is `0x80` or higher, so `0x0A` can only ever mean a real newline. The receiver can split on `0x0A` first and decode each message afterward without cutting a character in half.
@@ -843,7 +843,7 @@ This is how a receiver turns the byte stream into messages. It is the same algor
    - A `MALFORMED` frame gets `ERROR` (`MALFORMED`) with `rejected_type: null`.
    - A parsed message goes to the dispatcher. The shape and game-rule checks (#1, #3) happen there and are not part of this algorithm.
    - If handling a message closes the connection or ends the game (#5 "What each machine does", step 2), stop. The remaining messages from this `recv()` are discarded.
-8. If step 6 marked the buffer as too large, send `ERROR` (`FRAME_TOO_LARGE`) and close the connection (#5 row 6).
+8. If step 6 marked the buffer as too large, send `ERROR` (`FRAME_TOO_LARGE`) and close the connection once it is sent. The player is lost, so the opponent gets `GAME_OVER` (#5 row 6).
 9. Whatever is left in the buffer stays there for the next `recv()`.
 
 **Rules the steps depend on:**
@@ -857,7 +857,7 @@ This is how a receiver turns the byte stream into messages. It is the same algor
 | A bad frame never desyncs the stream | Its `0x0A` is removed along with it, so the next frame starts right after that `0x0A` |
 | The 64 KB cap applies only to the leftover bytes | A complete message has already been split off, so it should never trigger `FRAME_TOO_LARGE` |
 
-**Python sketch (this is the initial iteration)** Standard library only. `FrameBuffer` owns one connection's receive buffer. `feed()` does steps 4 to 6 and returns the complete messages in arrival order. `on_readable()` shows how a read handler calls `recv()` and `feed()`. `conn` is the per-connection object on `key.data`: `conn.frames` is its `FrameBuffer`, and `conn.closing` becomes true once the connection is being closed or the game has ended. The helpers `lose_player`, `send_error`, `dispatch`, and `close_after_send` stand in for code from #5 and the dispatcher.
+**Python sketch (this is the initial iteration)** Standard library only. `FrameBuffer` owns one connection's receive buffer. `feed()` does steps 4 to 6 and returns the complete messages in arrival order. `on_readable()` shows how a read handler calls `recv()` and `feed()`. `conn` is the per-connection object on `key.data`: `conn.frames` is its `FrameBuffer`, and `conn.closing` becomes true once the connection is being closed or the game has ended. The helpers `send_error` and `dispatch` stand in for the dispatcher. `trigger_state_transition("CLIENT_DISCONNECTED", conn)` is the state machine's "player lost" event (`fsm_specification.md` #3), named after the assignment's example. It stops reading from the connection, closes the socket once its send buffer is empty (so an `ERROR` already queued still goes out first), and ends the game for the opponent as the #5 table says.
 
 ```python
 import json
@@ -894,7 +894,7 @@ class FrameBuffer:
 def on_readable(sock, conn):                      # conn is key.data for this socket
     data = sock.recv(4096)                        # step 2: one recv() per readiness
     if data == b"":                               # step 3: EOF, peer closed (#5 row 3)
-        lose_player(conn)                         # partial bytes are thrown away
+        trigger_state_transition("CLIENT_DISCONNECTED", conn)  # partial bytes are thrown away
         return
     for msg in conn.frames.feed(data):            # step 7: handle in order
         if msg is None:
@@ -905,9 +905,128 @@ def on_readable(sock, conn):                      # conn is key.data for this so
             return                                # the rest of this recv() is discarded
     if conn.frames.too_large:                     # step 8 (#5 row 6)
         send_error(conn, "FRAME_TOO_LARGE", rejected_type=None)
-        close_after_send(conn)
+        trigger_state_transition("CLIENT_DISCONNECTED", conn)  # closes once the ERROR is sent, opponent gets GAME_OVER
 ```
 
-`ConnectionResetError` and `ConnectionAbortedError` from `recv()`. `BrokenPipeError` from a write, this means the player is lost (#5 row 4). The sketch leaves that handling out because the termination section covers it.
+`ConnectionResetError` or `ConnectionAbortedError` from `recv()`, or `BrokenPipeError` from a write, means the player is lost (#5 row 4). The sketch leaves that handling out because #7 Connection Termination covers it.
 
 **Checking it against the examples above.** In Fragmentation, the 1st `feed()` returns nothing and keeps 40 bytes, and the 2nd returns the `MOVE` and leaves the buffer empty. In Coalescing, one `feed()` returns `FLEET_ACCEPTED` and then `STATE_UPDATE`. In "Both Fragmentation and Coalescing at Once", the 1st `feed()` returns `LOBBY_WAIT` and keeps the 71 bytes that start `GAME_START`, and the 2nd returns `GAME_START`.
+
+---
+
+## 7. Connection Termination
+
+A connection can end in 3 ways at the TCP level. The server has to account for every one of them. A player it fails to notice is a game that will never end. #5 says what happens to the game after a player is lost. This section covers how the server notices, and how it closes a socket safely.
+
+#
+
+| How it ends | What happens on the wire | How the server notices | #5 row |
+| ----------- | ------------------------ | ---------------------- | ------ |
+| **Graceful quit** | The client sends `DISCONNECT`, then calls `close()`, which starts the TCP FIN handshake | The `DISCONNECT` message itself. The server acts on it right away and does not wait for the FIN | 2 |
+| **Clean close** | The client process exits or calls `close()` without sending `DISCONNECT`. The OS still sends a FIN | `recv()` returns `b""` (EOF) | 3 |
+| **Abrupt drop** | The client crashes, is killed (`kill -9`), or its host resets the connection. The OS sends a TCP RST, or a later packet from the server is answered with one | `recv()` raises `ConnectionResetError` or `ConnectionAbortedError`, or `send()` raises `BrokenPipeError` (or one of the other two) | 4 |
+| **Silent drop** | The link is cut or the node loses power. Nothing reaches the server: no FIN and no RST | Nothing on the socket. The 500 s placement or turn timer catches it (#5 Timeouts) | 5 |
+
+**The graceful quit** The client sends `DISCONNECT` and calls `close()`, which sends a FIN. The server reads the `DISCONNECT`, wipes the player's ID, unregisters and closes its side (its own FIN goes back to the client), and handles the opponent as #5 row 2 says. TCP finishes the 4-way FIN handshake (FIN, ACK, FIN, ACK) on its own. Because the server already acted on `DISCONNECT`, it never needs to see the `b""` that would follow.
+
+**The server will also close** After every `GAME_OVER` the server closes both client sockets (#5). The client then sees `b""` right after `GAME_OVER`. That EOF is expected: the client shows the result and exits. An EOF without a `GAME_OVER` before it means the connection was lost, and the client says so and exits.
+
+### The 0 Byte EOF Rule
+
+When the other side closes cleanly, `recv()` does not raise an exception. It returns `b""`, 0 bytes. This is the only way TCP reports a clean close. Every `recv()` result is checked for it.
+
+**Why missing it causes an infinite loop.** A closed socket stays readable forever, and every `recv()` on it returns `b""` instantly. A loop that does not check for `b""` will never stop:
+
+```python
+# WRONG: never checks for EOF
+while True:
+    data = sock.recv(4096)    # after the peer closes, returns b"" instantly, every time
+    handle(data)              # nothing to handle, so the loop goes straight back to recv()
+```
+
+The loop will go as fast as the CPU allows and never find out the player is gone. The same thing happens with the selector: a closed socket that is still registered is reported as readable on every `select()` call, so `select()` returns ASAP every time and the event loop spins. Meanwhile the game is stuck waiting on a player who will never send anything.
+
+**The rule:** `b""` from `recv()` means the player is lost. The server unregisters the socket, closes it, and handles the game as #5 row 3 says. Any partial message left in the receive buffer is discarded.
+
+### Socket Exceptions
+
+All sockets are non-blocking (`sock.setblocking(False)`), so one exception means "not right now" and the others mean the peer is gone:
+
+| Exception | Raised by | Meaning | What the server does |
+| --------- | --------- | ------- | -------------------- |
+| `BlockingIOError` | `recv()` or `send()` | The socket is not ready yet: no data to read, or the OS send buffer is full. **The connection is fine** | Nothing. Leave everything as it is and try again on the next readiness event. Unsent bytes stay in the connection's send buffer |
+| `ConnectionResetError` | `recv()` or `send()` | The peer sent a TCP RST: it crashed, was killed, or reset the connection | Player lost (#5 row 4) |
+| `BrokenPipeError` | `send()` | Writing to a connection the peer has already closed | Player lost (#5 row 4) |
+| `ConnectionAbortedError` | `recv()` or `send()` | The connection was aborted by the local OS (common on Windows after a reset) | Player lost (#5 row 4) |
+
+Treating `BlockingIOError` as a disconnect would be bad: on a non blocking socket it is normal, and dropping the player for it would end games for what would seem like no reason to the player.
+
+`TimeoutError` is not used. It only comes from sockets with `settimeout()`, and these sockets are non-blocking with no timeout. The 500 s timers in #5 do that job at the game level instead.
+
+The three "player lost" exceptions are all subclasses of `ConnectionError`. The server lists them by name anyway, so the code says exactly which failures it expects.
+
+### Closing a Socket Safely
+
+The server always unregisters a socket from the selector **before** closing it. A closed socket that is still registered makes `select()` do unfavorable things (see the 0 Byte EOF Rule). After that the socket is never used again, and its buffers are thrown away with the connection's `key.data`.
+
+### In Code
+
+This is how the read and write handlers catch every case. `trigger_state_transition("CLIENT_DISCONNECTED", conn)` is the same call as in the #6 sketch: the state machine's "player lost" event. It stops reading, closes the socket when its send buffer is empty, and ends the game for the opponent as #5 says. `close_connection` is what it calls to do the actual close.
+
+```python
+import selectors
+
+sel = selectors.DefaultSelector()
+
+def close_connection(sock):
+    sel.unregister(sock)                    # unregister first, so select() never sees a closed socket
+    sock.close()                            # sends our FIN
+
+def on_readable(sock, conn):
+    try:
+        data = sock.recv(4096)
+    except BlockingIOError:
+        return                              # not ready after all; the connection is fine
+    except (ConnectionResetError, ConnectionAbortedError):
+        trigger_state_transition("CLIENT_DISCONNECTED", conn)  # abrupt drop, TCP RST (#5 row 4)
+        return
+    if data == b"":
+        trigger_state_transition("CLIENT_DISCONNECTED", conn)  # clean close, TCP FIN (#5 row 3). Without this, the loop spins
+        return
+    ...                                     # feed(data) and handle each message, as in #6
+
+def on_writable(sock, conn):
+    try:
+        sent = sock.send(conn.out)          # send what the OS will take right now
+    except BlockingIOError:
+        return                              # OS send buffer is full; try again later
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        trigger_state_transition("CLIENT_DISCONNECTED", conn)  # the peer is gone (#5 row 4)
+        return
+    del conn.out[:sent]                     # keep only the bytes that did not go out
+    if not conn.out:
+        sel.modify(sock, selectors.EVENT_READ, conn)   # nothing left to write; stop asking
+```
+
+A `DISCONNECT` message is handled not handled here, it is handled in the dispatcher. it is an ordinary message that arrives through `feed()`, and the dispatcher calls `trigger_state_transition("CLIENT_DISCONNECTED", conn)` for it (#5 row 2). Silent drops never reach these handlers at all. They are caught by the timer check in the event loop (#5 Timeouts).
+
+### Every Termination, Mapped to the State Machine
+
+Every case above ends in the same place in the state machine: the player is lost. What happens next depends only on the state, as `fsm_specification.md` #3 shows.
+
+| Termination | Detected by | #5 row |
+| ----------- | ----------- | ------ |
+| Graceful quit | `DISCONNECT` message | 2 |
+| Clean close | `recv()` returns `b""` | 3 |
+| Abrupt drop | `ConnectionResetError`, `ConnectionAbortedError`, `BrokenPipeError` | 4 |
+| Silent drop | 500 s timer | 5 |
+| Oversized frame | 64 KB without a `0x0A` (`FRAME_TOO_LARGE`) | 6 |
+| Not reading | Send buffer over 64 KB | 7 |
+
+| State when the player is lost | Transition |
+| ----------------------------- | ---------- |
+| `WAITING_FOR_PLAYERS` | Stays in `WAITING_FOR_PLAYERS`. The ID is wiped and the slot is freed. No timer runs here, so a silent drop in the lobby is only noticed if a later write to that socket fails |
+| `FLEET_PLACEMENT` | `GAME_OVER` to the other player with `winner: null`, then `CLEANUP` |
+| `PLAYER_TURN` | `GAME_OVER` to the other player, who wins by forfeit, then `CLEANUP` |
+| `GAME_OVER` | That socket is closed. `GAME_OVER` still moves on to `CLEANUP` |
+| Both players at once | Straight to `CLEANUP`, nothing sent |
