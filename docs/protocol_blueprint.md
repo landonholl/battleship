@@ -375,7 +375,7 @@ The example below is `Player_1`'s view after five shots, using the `PLACE_FLEET`
 | `winner`         | string or null           | yes      | ID of the winning player. `null` when a player disconnects during fleet placement                 |
 | `reason`         | string                   | yes      | `"FLEET_DESTROYED"` or `"OPPONENT_DISCONNECTED"`                                                  |
 | `stats`          | object                   | yes      | stats per player keyed by player ID                       |
-| `your_board`     | array of strings         | yes      | The receiving player's final board, same encoding as in `STATE_UPDATE`                            |
+| `your_board`     | array of strings         | yes      | The receiving player's final board (see Board Encoding)                                               |
 | `opponent_board` | array of strings or null | yes      | The opponent's final board with every ship revealed. `null` when the game ended during fleet placement |
 
 Each entry in `stats`:
@@ -420,16 +420,16 @@ The example below is `Player_1`'s view after sinking `Player_2`'s whole fleet in
       ".S.O....SS"
     ],
     "opponent_board": [
-      ".........X",
-      "......XX.X",
-      ".........X",
-      ".....O...X",
-      "....XXX...",
+      ".........#",
+      "......##.#",
+      ".........#",
+      ".....O...#",
+      "....###...",
       ".....O....",
-      ".......X..",
-      ".......X..",
-      ".......XO.",
-      "XXXXX....."
+      ".......#..",
+      ".......#..",
+      ".......#O.",
+      "#####....."
     ]
   },
   "timestamp": 1727000500
@@ -489,3 +489,26 @@ The shape checks behind `MALFORMED` run first, before any game rule is checked.
 | `ALREADY_FIRED`     | `MOVE`              | The sender already fired at that cell this game                                                                | stays open       |
 
 When the connection stays open, the rejected message changes no game state and the client can try again. When it is closed, retrying cannot help, so the server sends the `ERROR` and then closes the socket.
+
+---
+
+## 4. Board Encoding
+
+Every grid in `STATE_UPDATE` and `GAME_OVER` (`your_board`, `tracking_grid`, `opponent_board`) uses the same encoding.
+
+**Layout:** a grid is an array of `board_size` strings, each exactly `board_size` characters long. The string's position in the array is the `row` and the character's position in the string is the `col`, matching `MOVE`. Row `0` (A) is the top and column `0` (1) is the left, so `grid[1][6]` is B7.
+
+**Characters:**
+
+| Char | On `your_board` / `opponent_board` | On `tracking_grid`                       |
+| ---- | ---------------------------------- | ---------------------------------------- |
+| `.`  | Water, no shot                     | Not fired at yet (unknown, may hide a ship) |
+| `S`  | Ship cell, not hit                 | Never appears                            |
+| `X`  | Ship cell, hit, ship still afloat  | Your shot hit a ship that is still afloat |
+| `#`  | Cell of a sunk ship                | Cell of a ship you sank                  |
+| `O`  | Opponent's shot missed             | Your shot missed                         |
+
+- `O` is the capital letter O, not zero. numbers don't appear in the grid.
+- When a ship is sunk, all of its cells change from `X` to `#` in the same update, on both the defender's board and the shooter's tracking grid. Because the client keeps no board state, this is how it knows which ships are finished.
+- `S` never appears on a `tracking_grid`, so a player never learns where an opponent's unhit ships are. Only `opponent_board` in `GAME_OVER` reveals them.
+- All five characters are plain ASCII, so each cell is one byte on the wire and JSON never escapes them. Labels like `A` to `J` and `1` to `10`, and any nicer display characters, are drawn by the client and never sent.

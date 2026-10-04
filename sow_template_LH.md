@@ -71,7 +71,7 @@ Every message, in both directions, uses the same envelope: `msg_type` (string), 
 
 #### Board Encoding:
 
-Each grid is a list of 10 strings of 10 characters. On a players own board: `.` water, `S` an undamaged ship cell, `X` a hit on one of their ships, `O` an opponent shot that missed. On the tracking grid: `.` not yet fired at, `X` a hit, `O` a miss. Ship positions are only ever encoded in the board belonging to the player receiving the message.
+Each grid is a list of 10 strings of 10 characters. On a players own board: `.` water, `S` an undamaged ship cell, `X` a hit on a ship still afloat, `#` a cell of a sunk ship, `O` an opponent shot that missed. On the tracking grid: `.` not yet fired at, `X` a hit on a ship still afloat, `#` a cell of a ship the player sank, `O` a miss. Ship positions are only ever encoded in the board belonging to the player receiving the message.
 
 #### Example JSON Protocol Schema:
 
