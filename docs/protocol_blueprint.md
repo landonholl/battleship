@@ -748,7 +748,7 @@ The byte positions are counted from the start of the stream. The receiver does n
 
 TCP can hand a message to the receiver in pieces. The split can fall at any byte, and `recv()` returns whatever has arrived so far. long messages like `STATE_UPDATE` are likely to be split, so the receiver must ALWAYS handle it.
 
-This example is the server receiving the 94 byte `MOVE` from #2 from `Player_1`, split after its 40th byte.
+Ex: is the server receiving the 94 byte `MOVE` from #2 from `Player_1`, split after its 40th byte.
 
 **1st `recv()` returns 40 bytes:**
 
@@ -779,9 +779,9 @@ This example is the server receiving the 94 byte `MOVE` from #2 from `Player_1`,
 
 ### Coalescing: Two Messages in One `recv()` Call
 
-This is the opposite of fragmentation. When the sender writes two messages close together, TCP may deliver them together, and one `recv()` returns both. This is most likely when the server writes two messages in the same event-loop step.
+This is the opposite of fragmentation. When the sender writes two messages close together, TCP can deliver them together, and one `recv()` returns both. This is most likely when the server writes two messages in the same event loop step.
 
-This example is `Player_2`'s client right after its fleet is accepted. The server writes `FLEET_ACCEPTED` and `STATE_UPDATE` in the same step (bytes 418 to 1008 of the stream above), and one `recv()` returns all 591 bytes. Shortened with `...` (the full bytes are in the stream above):
+Ex: `Player_2`'s client right after its fleet is accepted. The server writes `FLEET_ACCEPTED` and `STATE_UPDATE` in the same step (bytes 418 to 1008 of the stream above), and one `recv()` returns all 591 bytes. Shortened with `...` (the full bytes are in the stream above):
 
 ```text
 {"msg_type":"FLEET_ACCEPTED",...,"payload":{"opponent_ready":true},...}\n{"msg_type":"STATE_UPDATE",...,"shots_fired":0},...}\n
@@ -797,11 +797,11 @@ The receiver adds the 591 bytes to its buffer, which was empty, then keeps split
 
 The client handles them in the order they arrived: first it shows that the game is starting (`opponent_ready: true`), then it draws both boards from the `STATE_UPDATE`.
 
-**Why it must loop.** Suppose the receiver parsed only one message per `recv()`. It would handle `FLEET_ACCEPTED` and leave the whole `STATE_UPDATE` sitting in the buffer. The server sends `Player_2` nothing more until `Player_1` fires, so no new bytes arrive, `recv()` is not called again, and `Player_2` would not see its board or learn that turns have begun until then. The receiver must parse every complete message in its buffer before it waits for more bytes.
+**Why it needs to loop.** If the receiver parsed only 1 message per `recv()`. It would handle `FLEET_ACCEPTED` and leave the whole `STATE_UPDATE` in the buffer. The server sends `Player_2` nothing more until `Player_1` fires, so no new bytes arrive, `recv()` is not called again, and `Player_2` would not see its board or know that turns have begun until then. The receiver need to parse every complete message in its buffer before it waits for more bytes.
 
-### Both at Once: A `recv()` That Ends Mid-Message
+### Both Fragmentation and Coalescing at Once: A `recv()` That Ends Mid-Message
 
-Most of the time a `recv()` does a bit of both: it finishes one message and starts the next. This example is `Player_2`'s client right after it joins. `LOBBY_WAIT` and `GAME_START` (bytes 0 to 417 of the stream above) arrive as one `recv()` of 200 bytes and then one of 218 bytes.
+I think `recv()` can do a bit of both: it finishes one message and starts the next. This example is `Player_2`'s client right after it joins. `LOBBY_WAIT` and `GAME_START` (bytes 0 to 417 of the stream above) arrive as one `recv()` of 200 bytes and then one of 218 bytes.
 
 **1st `recv()` returns 200 bytes:** all 129 bytes of `LOBBY_WAIT`, then the first 71 bytes of `GAME_START`. Shortened with `...`:
 
@@ -820,4 +820,94 @@ Most of the time a `recv()` does a bit of both: it finishes one message and star
 | 1st `recv()` | 200 | 1: `LOBBY_WAIT` (`0x0A` at position 128) | 71, the start of `GAME_START` |
 | 2nd `recv()` | 71 + 218 = 289 | 1: `GAME_START` (`0x0A` at position 288) | 0 |
 
-The same loop handled all three cases: one message in pieces, two messages together, and a mix of both. The receiver never needs to know which case it is in. It adds the new bytes to the buffer, parses every message that ends in a `0x0A`, and keeps whatever is left for the next `recv()`.
+So the same loop can handle all three cases: one message in pieces, two messages together, and a when a mix of both happens. The receiver never needs to know which case it is in. It adds the new bytes to the buffer, parses every message that ends in a `0x0A`, and keeps whatever is left for the next `recv()`.
+
+### The Receiver Algorithm
+
+This is how a receiver turns the byte stream into messages. It is the same algorithm in both directions. The steps are written from the server's side. The client runs the same steps on its one socket, but the `ERROR` replies in steps 7 and 8 come only from the server, since `ERROR` only goes from server to client.
+
+**The steps:**
+
+1. Every connection has its own receive buffer, and it starts empty. The server keeps it on the selector key's `data`, so the two players' bytes are never mixed.
+2. When the selector says the socket is readable, call `recv(4096)` once.
+3. If `recv()` returns `b""`, that is EOF: the peer closed (#5 row 3). Stop. Nothing else is parsed from this connection, and any partial bytes left in the buffer are thrown away. If `recv()` raises `ConnectionResetError` or `ConnectionAbortedError` (or a later write to this socket raises `BrokenPipeError`), the player is lost (#5 row 4). #5 covers what happens next in both cases.
+4. Otherwise, add the new bytes to the end of the buffer.
+5. While the buffer contains a `0x0A`:
+   - Find the first `0x0A`.
+   - Take the bytes before it, then remove those bytes and the `0x0A` from the buffer.
+   - Decode those bytes as UTF-8 and parse them with `json.loads`.
+   - If the bytes are not valid UTF-8, not valid JSON, or not a JSON object, mark the frame as `MALFORMED`.
+   - Go back to the top of step 5. Stop only when no `0x0A` is left.
+6. Check the bytes left in the buffer (the unfinished message). If there are more than 65,536 (64 KB) and still no `0x0A`, mark the buffer as too large. Messages that were already split off in step 5 do not count toward the cap.
+7. Handle the messages from step 5 in the order they arrived, all in the same event-loop step:
+   - A `MALFORMED` frame gets `ERROR` (`MALFORMED`) with `rejected_type: null`.
+   - A parsed message goes to the dispatcher. The shape and game-rule checks (#1, #3) happen there and are not part of this algorithm.
+   - If handling a message closes the connection or ends the game (#5 "What each machine does", step 2), stop. The remaining messages from this `recv()` are discarded.
+8. If step 6 marked the buffer as too large, send `ERROR` (`FRAME_TOO_LARGE`) and close the connection (#5 row 6).
+9. Whatever is left in the buffer stays there for the next `recv()`.
+
+**Rules the steps depend on:**
+
+| Rule | Why |
+| ---- | --- |
+| Split on the byte `0x0A` before decoding | `0x0A` never appears inside a UTF-8 character, so splitting first can never cut a character in half (see above) |
+| A message is complete only when its `0x0A` has arrived | The receiver never calls `json.loads` to guess whether the bytes so far are a whole message |
+| Loop until no `0x0A` is left | Handling only one message per `recv()` can strand a complete message in the buffer (see Coalescing) |
+| An empty frame (two `0x0A` in a row) is not a special case | It fails `json.loads`, so it is `MALFORMED` like any other bad frame |
+| A bad frame never desyncs the stream | Its `0x0A` is removed along with it, so the next frame starts right after that `0x0A` |
+| The 64 KB cap applies only to the leftover bytes | A complete message has already been split off, so it should never trigger `FRAME_TOO_LARGE` |
+
+**Python sketch (this is the initial iteration)** Standard library only. `FrameBuffer` owns one connection's receive buffer. `feed()` does steps 4 to 6 and returns the complete messages in arrival order. `on_readable()` shows how a read handler calls `recv()` and `feed()`. `conn` is the per-connection object on `key.data`: `conn.frames` is its `FrameBuffer`, and `conn.closing` becomes true once the connection is being closed or the game has ended. The helpers `lose_player`, `send_error`, `dispatch`, and `close_after_send` stand in for code from #5 and the dispatcher.
+
+```python
+import json
+
+MAX_PARTIAL = 65536  # 64 KB cap on an unfinished message (FRAME_TOO_LARGE)
+
+class FrameBuffer:
+    """One connection's receive buffer. The server keeps one on each key.data."""
+
+    def __init__(self):
+        self.buf = bytearray()   # bytes received but not yet split off
+        self.too_large = False   # set when the unfinished message passes 64 KB
+
+    def feed(self, data):
+        """Add one recv() worth of bytes. Return every complete message in
+        arrival order: a dict, or None for a MALFORMED frame."""
+        self.buf += data                          # step 4: add to the end
+        messages = []
+        while b"\n" in self.buf:                  # step 5: any 0x0A left?
+            end = self.buf.index(b"\n")           # position of the first 0x0A
+            frame = self.buf[:end]                # the bytes before it
+            del self.buf[:end + 1]                # remove them and the 0x0A
+            try:
+                msg = json.loads(frame.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+                msg = None                        # not UTF-8, or not JSON (too deeply nested counts too)
+            if not isinstance(msg, dict):
+                msg = None                        # valid JSON, but not an object
+            messages.append(msg)
+        if len(self.buf) > MAX_PARTIAL:           # step 6: leftover bytes only
+            self.too_large = True
+        return messages
+
+def on_readable(sock, conn):                      # conn is key.data for this socket
+    data = sock.recv(4096)                        # step 2: one recv() per readiness
+    if data == b"":                               # step 3: EOF, peer closed (#5 row 3)
+        lose_player(conn)                         # partial bytes are thrown away
+        return
+    for msg in conn.frames.feed(data):            # step 7: handle in order
+        if msg is None:
+            send_error(conn, "MALFORMED", rejected_type=None)
+        else:
+            dispatch(conn, msg)                   # shape and game-rule checks (#1, #3)
+        if conn.closing:                          # connection closed or game ended (#5 step 2)
+            return                                # the rest of this recv() is discarded
+    if conn.frames.too_large:                     # step 8 (#5 row 6)
+        send_error(conn, "FRAME_TOO_LARGE", rejected_type=None)
+        close_after_send(conn)
+```
+
+`ConnectionResetError` and `ConnectionAbortedError` from `recv()`. `BrokenPipeError` from a write, this means the player is lost (#5 row 4). The sketch leaves that handling out because the termination section covers it.
+
+**Checking it against the examples above.** In Fragmentation, the 1st `feed()` returns nothing and keeps 40 bytes, and the 2nd returns the `MOVE` and leaves the buffer empty. In Coalescing, one `feed()` returns `FLEET_ACCEPTED` and then `STATE_UPDATE`. In "Both Fragmentation and Coalescing at Once", the 1st `feed()` returns `LOBBY_WAIT` and keeps the 71 bytes that start `GAME_START`, and the 2nd returns `GAME_START`.

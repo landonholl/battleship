@@ -1,3 +1,73 @@
+
+
+
+
+You are helping write docs/protocol_blueprint.md for a two-player console
+Battleship game over TCP (Python, single-threaded `selectors` event loop,
+non-blocking sockets). The blueprint is the single source of truth. Read all of
+it before writing, especially #3 (Error Codes), #5 (Game End and Cleanup) and
+#6 (Message Framing, including the fragmentation, coalescing and "Both at Once"
+examples).
+
+Task: write the next subsection of #6, titled "### The Receiver Algorithm". It
+explains how a receiver pulls complete messages out of a TCP byte stream. Do not
+edit any file. Return only the Markdown for the new subsection.
+
+It must contain:
+1. Numbered steps a reader can follow without reading code.
+2. A short Python sketch (standard library only, about 40 lines) with a
+   `FrameBuffer` class that owns one connection's receive buffer and a
+   `feed(data)` method that returns the complete messages in arrival order,
+   plus a few lines showing how a read handler calls `recv()` and `feed()`.
+3. One or two sentences tying it back to the fragmentation, coalescing and
+   "Both at Once" examples above it.
+
+Rules the algorithm must follow, exactly as the blueprint defines them:
+- Every connection has its own receive buffer. The server keeps it on the
+  selector key's `data`. The client uses the same algorithm.
+- On read readiness, call `recv(4096)` once and append the bytes to the end of
+  the buffer.
+- `recv()` returning `b""` is EOF: the peer closed (blueprint #5 row 3). Do not
+  parse anything else from that connection; leftover partial bytes are thrown
+  away. Do not describe exception handling in detail; the termination section
+  covers it. Just say ConnectionResetError and ConnectionAbortedError from
+  recv(), or BrokenPipeError from a later write, mean the player is lost
+  (#5 row 4).
+- Split on the byte 0x0A BEFORE decoding. A message is complete only when its
+  0x0A has arrived. Never try parsing to guess if bytes form a complete message.
+- Loop: while the buffer contains 0x0A, take the bytes before the first 0x0A,
+  remove them and the 0x0A from the buffer, then decode as UTF-8 and parse with
+  json.loads. Keep looping until no 0x0A is left. Never handle only one message
+  per recv().
+- A frame that is not valid UTF-8, not valid JSON, or not a JSON object is
+  rejected with ERROR (MALFORMED) and `rejected_type: null`. An empty frame
+  (two 0x0A in a row) is not a special case: it fails json.loads and is
+  MALFORMED. A bad frame never desyncs the stream, because the next frame
+  starts right after its 0x0A. Shape and game-rule checks (#1, #3) happen after
+  this, in the dispatcher, and are not part of this algorithm.
+- After the loop, check only the bytes left over (the unfinished message). If
+  more than 64 KB (65,536 bytes) has arrived without a 0x0A, the server sends
+  ERROR (FRAME_TOO_LARGE) and closes the connection (#5 row 6). Do not apply
+  the cap to complete messages that were already split off.
+- If handling a message closes the connection or ends the game (#5 "What each
+  machine does", step 2), stop: any remaining messages from that recv() are
+  discarded.
+- Messages from one recv() are handled in order, all in the same event-loop
+  step.
+
+Do not:
+- add message types, fields, error codes, or limits the blueprint does not
+  define
+- use threads, blocking calls, socket timeouts, sendall, or any third-party
+  library
+- parse with a regex, read a length prefix, or split on anything but 0x0A
+
+Style: match the blueprint (short plain sentences, tables or bullets where they
+help). Refer to sections as "#5", never with the section sign. No em dashes.
+Keep the Python short and commented so the author can explain every line.
+
+
+
 Write a standalone Python 3 script, tools/wire_example.py, using only the
 standard library. It builds and checks the "Back-to-Back Messages on the Wire
 Example" in docs/protocol_blueprint.md #6. Do not edit the blueprint.
