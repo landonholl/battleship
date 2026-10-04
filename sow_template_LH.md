@@ -52,8 +52,8 @@ Every message, in both directions, uses the same envelope: `msg_type` (string), 
 3. `GAME_START` (Server -> Clients): Both players connected. Payload contains the opponents display name, the board dimensions (10x10), and the fleet manifest (ship name and length for all five ships). Both clients move into fleet placement on receipt.
 4. `PLACE_FLEET` (Client -> Server): Submits all five ship placements at once, each as ship name, start coordinate, and orientation (`H` or `V`). The server validates that every ship is in bounds, matches its required length, and does not overlap another ship. An invalid layout is answered with `ERROR` and the player stays in placement.
 5. `MOVE` (Client -> Server): Fire one shot at a coordinate on the opponents grid. This is only allowed when the sender is the active player and both fleets are placed.
-6. `STATE_UPDATE` (Server -> Client): Sent individually to each player, **NOT** broadcast identically. Payload contains the active player ID, and the senders own board with incoming shots marked, and the senders tracking grid of its own shots, and the result of the most recent shot (`HIT`, `MISS`, or `SUNK`, plus the ship name when sunk), and the count of ships still afloat on each side. A player never receives the opponents ship positions, only the outcome of shots already taken.
-7. `GAME_OVER` (Server -> Clients): Terminal notification. Payload carries the winning `player_id` (or `null` when there is no winner), a `reason` (`FLEET_DESTROYED` or `OPPONENT_DISCONNECTED`), per player statistics (shots fired, hits, accuracy), and a final showing of both fleets.
+6. `STATE_UPDATE` (Server -> Client): Sent individually to each player, **NOT** broadcast identically. Payload contains the active player ID, and the senders own board with incoming shots marked, and the senders tracking grid of its own shots, and the result of the most recent shot (`HIT`, `MISS`, or `SUNK`, plus the ship name when sunk), and the count of ships still afloat on each side, and the total number of valid shots fired so far this game. A player never receives the opponents ship positions, only the outcome of shots already taken.
+7. `GAME_OVER` (Server -> Clients): Terminal notification. Payload carries the winning `player_id` (or `null` when there is no winner), a `reason` (`FLEET_DESTROYED` or `OPPONENT_DISCONNECTED`), per player statistics (shots and hits; accuracy is computed by the client), and a final showing of both fleets (no fleet reveal if the game ended during fleet placement).
 8. `ERROR` (Server -> Client): Rejection of a client message. Payload carries a machine readable `code` and a human readable `message`. The error is sent only to the offending client.
 9. `DISCONNECT` (Client -> Server): The player is quitting on purpose. The server wipes the sender's `player_id` and closes its socket. If the opponent is still connected, they receive `GAME_OVER` with reason `OPPONENT_DISCONNECTED`: as the winner during turns, or with no winner during fleet placement.
 
@@ -61,10 +61,13 @@ Every message, in both directions, uses the same envelope: `msg_type` (string), 
 
 - `OUT_OF_TURN`: a `MOVE` arrived from the player who is not the active player.
 - `ALREADY_FIRED`: the target coordinate was already fired at by this player.
-- `INVALID_COORD`: the coordinate is malformed or outside the 10x10 grid.
+- `INVALID_COORD`: the coordinate is outside the 10x10 grid.
 - `INVALID_PLACEMENT`: a fleet layout is out of bounds, the wrong length, or overlapping.
 - `WRONG_PHASE`: the message type is not legal in the current FSM state, such as a `MOVE` sent during placement.
-- `MALFORMED`: the frame is not valid JSON or is missing required envelope fields.
+- `MALFORMED`: the server could not understand the message: invalid JSON, a missing or wrong-type field, a bad `player_id`, an unknown `msg_type`, or a server-only message type sent by a client.
+- `FRAME_TOO_LARGE`: the client sent more than 64 KB without a newline. The server sends this error and then closes the connection.
+- `VERSION_MISMATCH`: the `CONNECT` version is not one the server speaks. The server sends this error and then closes the connection.
+- `ROOM_FULL`: a `CONNECT` arrived while both player slots are taken. The server sends this error and then closes the connection.
 
 #### Board Encoding:
 
@@ -138,7 +141,8 @@ Each grid is a list of 10 strings of 10 characters. On a players own board: `.` 
       "result": "HIT",
       "ship_sunk": null
     },
-    "ships_remaining": { "Player_1": 5, "Player_2": 5 }
+    "ships_remaining": { "Player_1": 5, "Player_2": 5 },
+    "shots_fired": 5
   },
   "timestamp": 1727000002
 }

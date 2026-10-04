@@ -1,7 +1,7 @@
 # Battleship Application Protocol Blueprint
 
-**Course:** CS 457 - Computer Networks
-**Author:** Landon Holland
+**Course:** CS 457
+**Written by:** Landon Holland
 
 ---
 
@@ -47,14 +47,16 @@ The server checks `player_id` on all client messages before acting on it:
 | Field          | Type   | Required | Description                                         |
 | -------------- | ------ | -------- | --------------------------------------------------- |
 | `display_name` | string | yes      | The name shown to the opponent                      |
-| `version`      | string | yes      | The protocol version the client speaks, e.g. `"0.0"` |
+| `version`      | string | yes      | The protocol version the client speaks, Ex: `"0.0"` |
 
 **Server handling:**
 
-1. Check that `player_id` is `null`.
-2. If the room has an open slot, assign the next ID in join order (`Player_1`, then `Player_2`), store the display name, and reply with `LOBBY_WAIT`.
-3. Once both IDs are assigned, send `GAME_START` to both players.
-4. If both slots are already taken, reply with `ERROR` and do not assign ID.
+1. If `player_id` is not `null`, reply `ERROR` (`MALFORMED`).
+2. If this socket already has an assigned ID (a `CONNECT` sent in the middle of a game), reply `ERROR` (`WRONG_PHASE`). A client only sends `CONNECT` again after `GAME_OVER`, when its ID has been wiped.
+3. If `version` is not a version the server speaks, reply `ERROR` (`VERSION_MISMATCH`) and close the connection.
+4. If the room has an open slot, assign the next ID in join order (`Player_1`, then `Player_2`), store the display name, and reply with `LOBBY_WAIT`.
+5. Once both IDs are assigned, send `GAME_START` to both players.
+6. If both slots are already taken, reply `ERROR` (`ROOM_FULL`), do not assign an ID, and close the connection.
 
 ```json
 {
@@ -216,7 +218,7 @@ The checks run in this order. The 1st one that fails chooses wht error the playe
 
 1. If the game is not in turns (for example, during fleet placement), reply `ERROR` (`WRONG_PHASE`).
 2. If the sender is not the active player, reply `ERROR` (`OUT_OF_TURN`).
-3. If `row` or `col` is missing, not an integer, or off the board, reply `ERROR` (`INVALID_COORD`).
+3. If `row` or `col` is off the board, reply `ERROR` (`INVALID_COORD`). A missing or non-integer `row` or `col` never reaches this step: it is rejected earlier as `MALFORMED` (see Error Codes).
 4. If this player has already fired at that cell, reply `ERROR` (`ALREADY_FIRED`).
 5. Otherwise the shot is valid:
    - resolve it against the opponent's fleet as `HIT`, `MISS`, or `SUNK`
@@ -254,7 +256,8 @@ There is no `phase` field. The message type already tells the client which phase
 | `your_board`      | array of strings    | yes      | The receiving player's own board: their ships and the opponent's shots. One string per row     |
 | `tracking_grid`   | array of strings    | yes      | The receiving player's shots at the opponent: hits and misses only. One string per row         |
 | `last_shot`       | object or null      | yes      | The most recent shot, described below. `null` on the first update, before any shot is fired   |
-| `ships_remaining` | object              | yes      | Ships still afloat for each player, keyed by player ID, e.g. `{"Player_1": 5, "Player_2": 4}`  |
+| `ships_remaining` | object              | yes      | Ships still afloat for each player, keyed by player ID, Ex: `{"Player_1": 5, "Player_2": 4}`  |
+| `shots_fired`     | integer             | yes      | Total valid shots fired by both players this game. `0` on the first update, then `+1` per valid shot. Rejected moves are not counted |
 
 Each `last_shot` object:
 
@@ -317,16 +320,126 @@ The example below is `Player_1`'s view after five shots, using the `PLACE_FLEET`
       "result": "HIT",
       "ship_sunk": null
     },
-    "ships_remaining": { "Player_1": 5, "Player_2": 5 }
+    "ships_remaining": { "Player_1": 5, "Player_2": 5 },
+    "shots_fired": 5
   },
   "timestamp": 1727000030
+}
+```
+
+### `ERROR`
+
+- **Direction:** Server -> Client
+- **Purpose:** The server rejects a client message. It is sent only to the client whose message was rejected.
+
+**Payload:**
+
+| Field     | Type   | Required | Description                                                                     |
+| --------- | ------ | -------- | ------------------------------------------------------------------------------- |
+| `code`    | string | yes      | Machine readable reason. The client decides what to do based on this field |
+| `message` | string | yes      | Human readable explanation the client can show to the player                     |
+
+**Server handling:**
+
+- A rejected message does not change game state. The server keeps the connection open and stays in the same state, so the client can correct the problem and try again.
+- A rejected `MOVE` does not use up the player's turn.
+- Exceptions: after `ROOM_FULL`, `VERSION_MISMATCH`, or `FRAME_TOO_LARGE`, the server sends the `ERROR` and then closes the connection, since retrying cannot help.
+
+**Client handling:**
+
+1. Show `message` to the player.
+2. Use `code` to decide what to do next, Ex: re prompt for a shot after `INVALID_COORD` or `ALREADY_FIRED`, or go back to the placement prompt after `INVALID_PLACEMENT`.
+
+```json
+{
+  "msg_type": "ERROR",
+  "player_id": "SERVER",
+  "payload": {
+    "code": "OUT_OF_TURN",
+    "message": "It is not your turn. Waiting for Player_2."
+  },
+  "timestamp": 1727000031
+}
+```
+
+### `GAME_OVER`
+
+- **Direction:** Server -> each connected client
+- **Purpose:** The game has ended. Tells each player the result, the final stats, and both final boards. This is the last message of a game.
+- **Who gets it:** on a normal win, both players, each with their own view (like `STATE_UPDATE`). On a disconnect, only the remaining player.
+
+**Payload:**
+
+| Field            | Type                     | Required | Description                                                                                       |
+| ---------------- | ------------------------ | -------- | ------------------------------------------------------------------------------------------------- |
+| `winner`         | string or null           | yes      | ID of the winning player. `null` when a player disconnects during fleet placement                 |
+| `reason`         | string                   | yes      | `"FLEET_DESTROYED"` or `"OPPONENT_DISCONNECTED"`                                                  |
+| `stats`          | object                   | yes      | stats per player keyed by player ID                       |
+| `your_board`     | array of strings         | yes      | The receiving player's final board, same encoding as in `STATE_UPDATE`                            |
+| `opponent_board` | array of strings or null | yes      | The opponent's final board with every ship revealed. `null` when the game ended during fleet placement |
+
+Each entry in `stats`:
+
+| Field   | Type    | Required | Description                         |
+| ------- | ------- | -------- | ----------------------------------- |
+| `shots` | integer | yes      | Valid shots this player fired       |
+| `hits`  | integer | yes      | How many of those shots were hits   |
+
+There is no accuracy field. The client computes it as `hits / shots` if it wants to show it, so the payload only carries integers. The per-player counts sit inside `stats` so they are not confused with the game-wide `shots_fired` in `STATE_UPDATE`.
+
+**Ending during fleet placement:** no shots have been fired, so `winner` is `null`, every `shots` and `hits` is `0`, and `opponent_board` is `null` even if the opponent had already placed a fleet.
+
+**Client handling:**
+
+1. Show the result, the stats, and both boards.
+2. Clear its `player_id` and automatically send `CONNECT` with `player_id: null` to rejoin the lobby for the next game.
+
+The example below is `Player_1`'s view after sinking `Player_2`'s whole fleet in 20 shots (17 hits, 3 misses). `Player_2` fired 19 shots and hit 6 times.
+
+```json
+{
+  "msg_type": "GAME_OVER",
+  "player_id": "SERVER",
+  "payload": {
+    "winner": "Player_1",
+    "reason": "FLEET_DESTROYED",
+    "stats": {
+      "Player_1": { "shots": 20, "hits": 17 },
+      "Player_2": { "shots": 19, "hits": 6 }
+    },
+    "your_board": [
+      "XXSSS.O...",
+      ".O..O.....",
+      "...X....O.",
+      "...X...O..",
+      "...X..O...",
+      "O..S.....O",
+      "..O..XSS..",
+      ".S.....O..",
+      ".S..O.O...",
+      ".S.O....SS"
+    ],
+    "opponent_board": [
+      ".........X",
+      "......XX.X",
+      ".........X",
+      ".....O...X",
+      "....XXX...",
+      ".....O....",
+      ".......X..",
+      ".......X..",
+      ".......XO.",
+      "XXXXX....."
+    ]
+  },
+  "timestamp": 1727000500
 }
 ```
 
 ### `DISCONNECT`
 
 - **Direction:** Client -> Server
-- **Purpose:** The player is quitting on purpose. Sending `DISCONNECT` before closing the socket lets the server tell a deliberate quit apart from a crash or network drop. The opponent sees `OPPONENT_DISCONNECTED` either way.
+- **Purpose:** The player is quitting on purpose. Sending `DISCONNECT` before closing the socket lets the server tell a quit apart from a crash or network drop. The opponent sees `OPPONENT_DISCONNECTED` either way.
 
 **Payload:** empty object `{}`. No fields.
 
@@ -351,3 +464,28 @@ A client that has not been assigned an ID yet does not send `DISCONNECT`, since 
   "timestamp": 1727000300
 }
 ```
+
+---
+
+## 3. Error Codes
+
+Every `ERROR` carries one of these codes in its `code` field. The codes split into two groups:
+
+- **`MALFORMED`:** the server could not understand the message. The JSON is invalid, a required envelope or payload field is missing or has the wrong type, `player_id` is wrong, or `msg_type` is not a message a client may send. A client that receives `MALFORMED` has a bug, not a player mistake.
+- **Every other code:** the server understood the message, but it breaks a game or connection rule.
+
+The shape checks behind `MALFORMED` run first, before any game rule is checked.
+
+| Code                | Sent in response to | Condition                                                                                                      | Connection after |
+| ------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `MALFORMED`         | any message         | Invalid JSON; a missing or wrong-type envelope or payload field; a `null` `player_id` on anything but `CONNECT`; a non-null `player_id` on `CONNECT`; a `player_id` that does not match the socket; an unknown `msg_type`; or a server-only type (`LOBBY_WAIT`, `GAME_START`, `STATE_UPDATE`, `ERROR`, `GAME_OVER`) sent by a client | stays open       |
+| `FRAME_TOO_LARGE`   | any message         | More than 64 KB arrived without a newline                                                                      | **closed**       |
+| `VERSION_MISMATCH`  | `CONNECT`           | `version` is not a protocol version the server speaks (currently only `"0.0"`)                                  | **closed**       |
+| `ROOM_FULL`         | `CONNECT`           | Both player slots are already taken                                                                            | **closed**       |
+| `WRONG_PHASE`       | any client message  | The message is not allowed in the current state, e.g. `MOVE` during fleet placement, a second `PLACE_FLEET` after a layout was accepted, or `CONNECT` from a socket that already has an ID | stays open       |
+| `INVALID_PLACEMENT` | `PLACE_FLEET`       | A ship is missing, repeated, or unknown; an `orientation` is not `"H"` or `"V"`; a ship runs off the board; or two ships overlap | stays open       |
+| `OUT_OF_TURN`       | `MOVE`              | The sender is not the active player                                                                            | stays open       |
+| `INVALID_COORD`     | `MOVE`              | `row` or `col` is off the board                                                                                | stays open       |
+| `ALREADY_FIRED`     | `MOVE`              | The sender already fired at that cell this game                                                                | stays open       |
+
+When the connection stays open, the rejected message changes no game state and the client can try again. When it is closed, retrying cannot help, so the server sends the `ERROR` and then closes the socket.
