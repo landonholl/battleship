@@ -172,14 +172,16 @@ The client does not send a ship's length. The server looks it up from the fleet 
 
 **Server handling:**
 
-1. Validate the layout:
+The checks run in this order. The 1st one that fails chooses what error the player will see.
+
+1. If the game is not in fleet placement, or this player's valid layout is already stored, reply `ERROR` (`WRONG_PHASE`). A layout is final once accepted, so a 2nd `PLACE_FLEET` is rejected here even if it is valid, and it is never stored.
+2. Validate the whole layout before storing any of it:
    - every ship in the fleet appears only once, and no other names appear
    - `orientation` is `"H"` or `"V"`
    - every cell of every ship is on the board
    - no 2 ships share a cell
-2. If any check fails, reply `ERROR` (`INVALID_PLACEMENT`). The player stays in fleet placement and can send a corrected `PLACE_FLEET`.
-3. If the layout is valid, store it, stop that player's placement timer, and reply `FLEET_ACCEPTED` (see below).
-4. A layout is final once accepted. Another `PLACE_FLEET` from a player whose valid layout is already stored is rejected with `ERROR` (`WRONG_PHASE`).
+3. If any check fails, reply `ERROR` (`INVALID_PLACEMENT`). Nothing is stored. The player stays in fleet placement and can send a corrected `PLACE_FLEET`.
+4. If the layout is valid, store it, stop that player's placement timer, and reply `FLEET_ACCEPTED` (see below).
 5. Once both players have a valid layout (the 2nd `FLEET_ACCEPTED` has `opponent_ready: true`), the game moves to turns with `Player_1` as the active player, and the server sends each player a `STATE_UPDATE`.
 
 ```json
