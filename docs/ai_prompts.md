@@ -14,7 +14,7 @@ Claude Code loads a project instruction file, `CLAUDE.md`, at the start of every
 What it does:
 
 - **Pins Claude to the blueprint.** The blueprint is the single source of truth, Claude must name the sections a task implements, and it may never change the spec to fit its code.
-- **Carries the schema.** It lists the envelope, every message type with its direction, every error code, and every FSM state, each with the blueprint section to read for the details. Anything not on these lists is not allowed.
+- **Carries the schema.** It lists the envelope, every message type with its direction, every error code, every FSM state, and every timer, each with the blueprint section to read for the details. Anything not on these lists is not allowed.
 - **Rules out generic boilerplate by name.** No threads, blocking calls, socket timeouts, `sendall`, `asyncio`, third-party libraries, or other framing. Every function must map to a named message type, error code, FSM state, or blueprint section.
 - **Sets the working process.** One item at a time, review after every change, no commits unless asked, and output checked against the blueprint's examples before it is shown.
 
@@ -25,11 +25,14 @@ game over TCP, written in Python, for CS 457.
 THE SPECIFICATION
 - docs/protocol_blueprint.md is the single source of truth.
   docs/fsm_specification.md is the server state machine and must agree with it.
+  docs/concurrency_design.md is the server's concurrency design and must
+  agree with both.
   sow_template_LH.md follows the blueprint.
 - Before writing anything, read the blueprint sections the task touches, and
   name them in your answer (e.g. "implements #6, The Receiver Algorithm").
 - You implement the spec. You never change it to fit the code. If the code
   seems to need a spec change, stop and ask me. The blueprint is changed first.
+- Use the interview method any time you are unsure about something that the user could clarify.
 
 THE PROTOCOL IN SHORT (the blueprint has the full schema)
 - Transport: TCP, port 5000. The client finds the server as server.holland.edu
@@ -58,6 +61,8 @@ THE PROTOCOL IN SHORT (the blueprint has the full schema)
   sends each player its own view, never the opponent's ship positions.
 - Every way a game can end is in the #5 table, including the 500 s timeouts
   and the 64 KB buffer caps. Do not invent other endings.
+- Timers (#5 Timeouts), and no others: 500 s placement and turn, 10 s game
+  over, 30 s connect.
 
 CODE RULES
 - Server: one thread, selectors.DefaultSelector, non-blocking sockets, and
@@ -68,6 +73,8 @@ CODE RULES
   error code, FSM state, or blueprint section, and a comment says which.
 - b"" (EOF), ConnectionResetError, ConnectionAbortedError, and BrokenPipeError
   mean the player is lost (#7). BlockingIOError is not a disconnect.
+- Nothing is queued to a connection that is closing (#7). A closing socket is
+  still read, but the bytes are thrown away (#5).
 - Keep each piece small enough for me to explain line by line. Code I cannot
   explain is thrown away and redone at a smaller scope.
 
@@ -218,8 +225,12 @@ Rules, exactly as the blueprint defines them:
   as it is. BrokenPipeError, ConnectionResetError, and ConnectionAbortedError
   mean the player is lost: call trigger_state_transition("CLIENT_DISCONNECTED",
   conn) (#7).
-- When a connection is being closed, it closes only after conn.out is empty,
-  and it is unregistered from the selector before close() (#7).
+- A connection closed after its GAME_OVER or a closing ERROR closes only
+  after conn.out is empty. A lost player's connection is closed right away
+  and conn.out is dropped. Either way it is unregistered from the selector
+  before close() (#7).
+- queue_message adds nothing to a connection that is already closing (#7,
+  Nothing is queued after the closing message).
 
 Do not:
 - use sendall, threads, blocking calls, settimeout, asyncio, or any
@@ -328,7 +339,8 @@ from framing.py. It never touches a socket directly. It contains:
 3. on_player_lost(conn): what trigger_state_transition("CLIENT_DISCONNECTED",
    conn) runs. It follows the #5 table and the "Player Lost" tables in
    fsm_specification.md #3.
-4. check_timers(now): the 500 s placement and turn timers from #5 Timeouts,
+4. check_timers(now): the 500 s placement and turn timers, the 10 s game
+   over timer, and the 30 s connect timer from #5 Timeouts,
    using time.monotonic().
 
 Rules, exactly as the spec defines them:
@@ -392,3 +404,11 @@ AI output on this project is not taken on trust. Each check below was run during
 **The prompts checked against the spec** The message types, directions, error codes, and states listed in the standing prompt are compared to the blueprint and FSM by script, so the prompt cannot contradict the spec
 
 **Changes made from Sprint 0 to Sprint 1.** During Sprint 1, I dropped automatic reconnects as too complex, set the 500 s timeouts, asked for an explicit reply to every setup step, which led to `FLEET_ACCEPTED`, and chose the 64 KB send buffer cap after the model pointed out the risk.
+
+**Checks run during Sprint 2.** The concurrency design (`docs/concurrency_design.md`) was checked the same way:
+
+- **The event loop, run as written.** The loop in its 2.6 was pulled straight out of the document and run against real sockets on localhost, 16 checks. Among them: one client stuck mid-frame does not delay the other, an idle loop wakes about once a second and never spins, EOF closes and unregisters a socket, one handler closing another socket in the same pass does not crash, a rejected client gets its `ERROR` and then a clean EOF, and `accept()` raising `OSError` (EMFILE) does not crash. With the `is_open` guard removed, the server crashed with `OSError 10038`, which is why the guard is there.
+- **Scores rebuilt from the blueprint's examples.** Storing only the fleets and the fired-at cells (its 4.1) and computing everything else rebuilt `Player_1`'s `STATE_UPDATE` example in #2 exactly, and recounting the `GAME_OVER` example's boards gave its `stats` exactly.
+- **Diagrams compiled before commit.** Both Mermaid diagrams were compiled with mermaid-cli and the renders were looked at for overlapping labels. Two layouts of the lifecycle diagram were thrown out for that reason.
+
+**Changes made in Sprint 2.** Working through the concurrency design found gaps in the spec, and the blueprint was changed first: a 10 s game over timer (a client that stops reading could hold the server in `GAME_OVER` forever), a 30 s connect timer (connections that never send `CONNECT` stayed open forever), "keep reading, but throw the bytes away" on a closing socket (not reading spins the loop and can turn the FIN into an RST), nothing queued after a closing message, and the `PLACE_FLEET` checks reordered so `WRONG_PHASE` comes first.

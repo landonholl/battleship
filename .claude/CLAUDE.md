@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-CS 457 (Computer Networks) semester project: two-player console Battleship over TCP, in Python. The server runs on one CML node and the two clients on two others (SOW 5). Planned entry points are `server.py` and `client.py` (SOW 5.3). The repo holds design docs only so far (Sprint 1).
+CS 457 (Computer Networks) semester project: two-player console Battleship over TCP, in Python. The server runs on one CML node and the two clients on two others (SOW 5). Planned entry points are `server.py` and `client.py` (SOW 5.3). The repo holds design docs only so far (Sprints 1 and 2).
 
 ## Commands
 
@@ -21,6 +21,8 @@ game over TCP, written in Python, for CS 457.
 THE SPECIFICATION
 - docs/protocol_blueprint.md is the single source of truth.
   docs/fsm_specification.md is the server state machine and must agree with it.
+  docs/concurrency_design.md is the server's concurrency design and must
+  agree with both.
   sow_template_LH.md follows the blueprint.
 - Before writing anything, read the blueprint sections the task touches, and
   name them in your answer (e.g. "implements #6, The Receiver Algorithm").
@@ -55,6 +57,8 @@ THE PROTOCOL IN SHORT (the blueprint has the full schema)
   sends each player its own view, never the opponent's ship positions.
 - Every way a game can end is in the #5 table, including the 500 s timeouts
   and the 64 KB buffer caps. Do not invent other endings.
+- Timers (#5 Timeouts), and no others: 500 s placement and turn, 10 s game
+  over, 30 s connect.
 
 CODE RULES
 - Server: one thread, selectors.DefaultSelector, non-blocking sockets, and
@@ -65,6 +69,8 @@ CODE RULES
   error code, FSM state, or blueprint section, and a comment says which.
 - b"" (EOF), ConnectionResetError, ConnectionAbortedError, and BrokenPipeError
   mean the player is lost (#7). BlockingIOError is not a disconnect.
+- Nothing is queued to a connection that is closing (#7). A closing socket is
+  still read, but the bytes are thrown away (#5).
 - Keep each piece small enough for me to explain line by line. Code I cannot
   explain is thrown away and redone at a smaller scope.
 
@@ -81,10 +87,12 @@ HOW WE WORK
 ## Where things live
 
 - `docs/protocol_blueprint.md` (single source of truth), `docs/fsm_specification.md`, `docs/ai_prompts.md`: the Sprint 1 deliverables.
+- `docs/concurrency_design.md`: the Sprint 2 deliverable (concurrency model, connection lifecycle, thread safety, score broadcast, move sequence diagram).
 - `tools/`: scripts that check the docs against real serialization.
-- `hidden/` (gitignored, local only): `sprint1.md` is the assignment text and grading rubric. `todo_list.md` is the live to-do list and records decisions already made. Check it before asking about something that may already be settled.
+- `hidden/` (gitignored, local only): `sprint2todo.md` is the live Sprint 2 to-do list and records decisions already made. (`sprint1.md` and `todo_list.md` from Sprint 1 are no longer on disk.) Check it before asking about something that may already be settled.
 
 ## Deliverable conventions
 
 - Commit Markdown only for the design docs (no PDFs).
 - Draw the FSM in Mermaid `stateDiagram-v2`. Avoid `#`, `;`, `{` and `}` in transition labels, and check that it renders on GitHub. If the diagram changes, regenerate the Mermaid Live link in `docs/fsm_specification.md`.
+- The same rules apply to the two diagrams in `docs/concurrency_design.md` (the socket lifecycle and the move `sequenceDiagram`). Check them with `npx -y @mermaid-js/mermaid-cli@11` and regenerate their Mermaid Live links when they change.

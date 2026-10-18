@@ -2,7 +2,13 @@
 
 Landon Holland's semester project for CS 457 (Computer Networks): a two-player Battleship game played in the console over TCP, written in Python. One server and two clients run on separate nodes in a CML multi-subnet topology.
 
-**Status:** Sprint 1, design. The application protocol and the server state machine are specified. There is no game code yet.
+**Status:** Sprint 2, design. The application protocol, the server state machine, and the server's concurrency design are specified. There is no game code yet.
+
+## Sprint 2 Deliverable
+
+| Deliverable | What it covers |
+| ----------- | -------------- |
+| [Concurrency Design](docs/concurrency_design.md) | The concurrency model (one-thread `selectors` event loop) and why, the full connection lifecycle with a socket state diagram and the event loop in code, multi-client capacity, the shared resources and why no locks are needed, how scores are stored and broadcast, and the move, validation, and broadcast sequence diagram in Mermaid |
 
 ## Sprint 1 Deliverables
 
@@ -19,13 +25,13 @@ The protocol blueprint is the single source of truth. The other documents follow
 
 - **Transport:** TCP on port 5000. The client finds the server as `server.holland.edu` through DNS.
 - **Messages:** one JSON object per message, UTF-8, ended by a single newline byte (`0x0A`).
-- **Server:** one thread with a `selectors` event loop and non-blocking sockets. It is the only authority on the game: clients keep no game state and only draw what the server sends.
+- **Server:** one thread with a `selectors` event loop and non-blocking sockets, so no locks are needed (see [Concurrency Design](docs/concurrency_design.md)). It is the only authority on the game: clients keep no game state and only draw what the server sends. After every valid shot that does not end the game, both players get their own `STATE_UPDATE` in the same event-loop step.
 - **Game flow:** both players connect, both place their fleets, then they take turns firing one shot at a time until one fleet is sunk. Every game ends the same way: the server sends `GAME_OVER` to each player it can still reach, closes both connections, and waits for the next two players.
 
 ## Repository Layout
 
 ```text
-docs/                    Sprint 1 deliverables (Markdown)
+docs/                    Sprint 1 and 2 deliverables (Markdown)
 tools/wire_example.py    Checks the wire example in the protocol blueprint
 sow_template_LH.md       Statement of Work
 github_link_LH.md        Link to this repository
