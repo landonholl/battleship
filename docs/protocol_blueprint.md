@@ -594,14 +594,15 @@ Rows 2 to 7 look the same to the remaining player. The server cannot reliably te
 - **Lobby disconnect:** `Player_1` is lost (any of rows 2 to 4, 6, or 7; row 5 does not apply because there is no lobby timer) while waiting for an opponent, before `GAME_START`. There is no game yet, so nothing is sent. The server wipes the ID, frees the slot, and keeps waiting. The next client to connect becomes `Player_1`.
 - **`VERSION_MISMATCH` and `ROOM_FULL`:** these close only a client that has no seat (a seated client's `CONNECT` is stopped earlier with `WRONG_PHASE`), so a game in progress is not affected.
 - **Rejected messages:** every other `ERROR` leaves the connection open and the game running (#3).
+- **Connect timeout:** a connection that does not get a seat within 30 s of being accepted is closed with no message (see Timeouts). It never had a seat, so a game in progress is not affected.
 
 ### What each machine does
 
 **Server:**
 
 1. Send `GAME_OVER` to each player it can still reach (none in row 8).
-2. Stop reading from both client sockets. Any bytes that arrive after this point are discarded.
-3. Close each socket once its send buffer is empty, so `GAME_OVER` is handed to the OS before the FIN. Unregister both sockets from the selector.
+2. Keep reading from both client sockets, but throw the bytes away. Nothing that arrives after this point is handled. The sockets are still read so that a client that closes first is noticed instead of spinning the event loop, and so that no unread bytes are left when the socket closes, which would make the OS send a TCP RST instead of a FIN (#7).
+3. Close each socket once its send buffer is empty, so `GAME_OVER` is handed to the OS before the FIN. Unregister both sockets from the selector. If a socket's send buffer is still not empty when the 10 s game over timer runs out, it is closed anyway and its unsent bytes are dropped (see Timeouts).
 4. `CLEANUP`: discard the session (both boards and fleets, both player IDs, `active_player`, shot counts, timers).
 5. Return to `WAITING_FOR_PLAYERS`. The listening socket on port 5000 stays open the whole time, so a new game starts as soon as two new clients connect. This is the reset for the next round.
 
@@ -611,17 +612,21 @@ Rows 2 to 7 look the same to the remaining player. The server cannot reliably te
 
 ### Timeouts
 
-A dead link with no FIN or RST looks like a slow player. Without a deadline the server would wait on that player forever and the opponent would be stuck. So the server gives each player a 500 second deadline whenever the game is waiting on them.
+A dead link with no FIN or RST looks like a slow player. Without a deadline the server would wait on that player forever and the opponent would be stuck. So the server gives each player a 500 second deadline whenever the game is waiting on them, itself a 10 second deadline to finish sending the last messages of a game, and every new connection a 30 second deadline to send its `CONNECT`.
 
 | Timer | Starts | Stopped by | Not stopped or reset by |
 | ----- | ------ | ---------- | ----------------------- |
 | **Placement** (one per player) | When the server sends `GAME_START` | That player's valid `PLACE_FLEET` being accepted | A rejected `PLACE_FLEET` (`INVALID_PLACEMENT`, `MALFORMED`) |
 | **Turn** (active player only) | When a turn begins, Ex: the `STATE_UPDATE` naming that player as `active_player` is sent | A valid `MOVE` from the active player | A rejected `MOVE` (`INVALID_COORD`, `ALREADY_FIRED`, `MALFORMED`) |
+| **Game over** (one, for the `GAME_OVER` state) | When the server enters `GAME_OVER` | Both client sockets being closed | Anything a client sends (it is read and thrown away) |
+| **Connect** (one per connection without a seat) | When the server accepts the connection | That connection's `CONNECT` being accepted (it gets a seat) | A rejected `CONNECT` (`MALFORMED`), or any other message |
 
-- When a timer reaches 500 s, the server treats that player as disconnected: row 5 of the table above. Its socket is closed with no message and the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`).
+- When a placement or turn timer reaches 500 s, the server treats that player as disconnected: row 5 of the table above. Its socket is closed with no message and the opponent gets `GAME_OVER` (`OPPONENT_DISCONNECTED`).
+- When the game over timer reaches 10 s, every client socket still open is closed and its unsent bytes are dropped, and the server runs `CLEANUP`. A client that is reading gets its `GAME_OVER` in milliseconds, so this only catches a client that has stopped reading. Without it, that client's full OS buffer would keep its `GAME_OVER` from ever being sent, the server would stay in `GAME_OVER` forever, and no new game could start. It is not a new way for a game to end: the game is already over, and the result was already decided.
+- When the connect timer reaches 30 s, the connection is closed with no message. It never had a seat, so no game is affected and nothing is sent to anyone. A real client sends `CONNECT` within milliseconds of connecting, so this only catches a connection that was never going to join. Without it, each one would stay open forever, and enough of them would use up the server's file descriptors so that real players could not connect.
 - Rejected messages do not reset a timer, so a client cannot stall the game forever by sending bad moves.
 - Only the player the game is waiting on is timed. The waiting player in `PLAYER_TURN`, and a player whose fleet is already accepted, can stay idle.
-- There is no timer in the lobby. `Player_1` can wait for an opponent as long as it likes.
+- There is no timer in the lobby once a client has a seat. `Player_1` can wait for an opponent as long as it likes. The connect timer stops as soon as its `CONNECT` is accepted.
 - The deadlines are kept by the server's own clock (`time.monotonic()`), not the envelope's `timestamp`, which the client controls. The event loop waits on the selector with a timeout so it wakes up to check deadlines even when no socket has data.
 
 ### Send Buffer Limit
@@ -859,7 +864,7 @@ This is how a receiver turns the byte stream into messages. It is the same algor
 | A bad frame never desyncs the stream | Its `0x0A` is removed along with it, so the next frame starts right after that `0x0A` |
 | The 64 KB cap applies only to the leftover bytes | A complete message has already been split off, so it should never trigger `FRAME_TOO_LARGE` |
 
-**Python sketch (this is the initial iteration)** Standard library only. `FrameBuffer` owns one connection's receive buffer. `feed()` does steps 4 to 6 and returns the complete messages in arrival order. `on_readable()` shows how a read handler calls `recv()` and `feed()`. `conn` is the per-connection object on `key.data`: `conn.frames` is its `FrameBuffer`, and `conn.closing` becomes true once the connection is being closed or the game has ended. The helpers `send_error` and `dispatch` stand in for the dispatcher. `trigger_state_transition("CLIENT_DISCONNECTED", conn)` is the state machine's "player lost" event (`fsm_specification.md` #3), named after the assignment's example. It stops reading from the connection, closes the socket once its send buffer is empty (so an `ERROR` already queued still goes out first), and ends the game for the opponent as the #5 table says.
+**Python sketch (this is the initial iteration)** Standard library only. `FrameBuffer` owns one connection's receive buffer. `feed()` does steps 4 to 6 and returns the complete messages in arrival order. `on_readable()` shows how a read handler calls `recv()` and `feed()`. `conn` is the per-connection object on `key.data`: `conn.frames` is its `FrameBuffer`, and `conn.closing` becomes true once the connection is being closed or the game has ended. The helpers `send_error` and `dispatch` stand in for the dispatcher. `trigger_state_transition("CLIENT_DISCONNECTED", conn)` is the state machine's "player lost" event (`fsm_specification.md` #3), named after the assignment's example. It keeps reading from the connection but throws the bytes away, closes the socket once its send buffer is empty (so an `ERROR` already queued still goes out first), and ends the game for the opponent as the #5 table says.
 
 ```python
 import json
@@ -973,7 +978,7 @@ The server always unregisters a socket from the selector **before** closing it. 
 
 ### In Code
 
-This is how the read and write handlers catch every case. `trigger_state_transition("CLIENT_DISCONNECTED", conn)` is the same call as in the #6 sketch: the state machine's "player lost" event. It stops reading, closes the socket when its send buffer is empty, and ends the game for the opponent as #5 says. `close_connection` is what it calls to do the actual close.
+This is how the read and write handlers catch every case. `trigger_state_transition("CLIENT_DISCONNECTED", conn)` is the same call as in the #6 sketch: the state machine's "player lost" event. It keeps reading but throws the bytes away, closes the socket when its send buffer is empty, and ends the game for the opponent as #5 says. `close_connection` is what it calls to do the actual close.
 
 ```python
 import selectors
