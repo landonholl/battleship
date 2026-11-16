@@ -2,7 +2,31 @@
 
 Landon Holland's semester project for CS 457 (Computer Networks): a two-player Battleship game played in the console over TCP, written in Python. One server and two clients run on separate nodes in a CML multi-subnet topology.
 
-**Status:** Sprint 2, design. The application protocol, the server state machine, and the server's concurrency design are specified. There is no game code yet.
+**Status:** Sprint 3, working code. The server and client implement the protocol blueprint, the state machine, and the concurrency design, and have been played end to end on localhost.
+
+## Sprint 3 Deliverables
+
+| Deliverable | What it covers |
+| ----------- | -------------- |
+| [server.py](server.py) | Command line (`-h`, `-p`), the one-thread `selectors` event loop on `0.0.0.0` (concurrency #2), the socket side of every connection: accept, read, write, close, the 30 s connect timer |
+| [client.py](client.py) | Command line (`-h`, `-i`, `-p`), DNS lookup with `socket.gaierror` handled, the console UI: fleet placement, both boards, turn status, scores, and the final result |
+| [game.py](game.py) | The server state machine (FSM spec), each message's server handling (blueprint #2), board encoding (#4), game end and timers (#5) |
+| [validate.py](validate.py) | The `MALFORMED` shape checks (blueprint #1, #2, #3) |
+| [framing.py](framing.py) | The envelope (#1) and newline framing with the receiver algorithm (#6), shared by both programs |
+| [Execution Log](docs/sprint3_execution_log.md) | Two clients and the server on localhost: 7 turns, rejected moves, a 3rd client turned away, a forfeit, then a second full game on the same server |
+
+## Running It
+
+Python 3, standard library only. Start the server, then one client per player (on CML: `-i server.holland.edu -p 5000`; on one machine: `-i localhost`):
+
+```text
+python3 server.py -p 5000
+python3 client.py -i localhost -p 5000
+```
+
+- `-h` on either program prints its usage. `-p` is required on both and must be 1024 to 65535. `-i` is required on the client.
+- The client resolves `-i` through DNS. If the name cannot be resolved it prints a message about the router's DNS configuration and exits with status 1.
+- Placing ships: type a start cell and `H` or `V` for each ship (`A1 H`), or `r` for a random fleet. Firing: type a cell such as `B7`. `quit` at any prompt leaves the game.
 
 ## Sprint 2 Deliverable
 
@@ -23,7 +47,7 @@ The protocol blueprint is the single source of truth. The other documents follow
 
 ## The Design at a Glance
 
-- **Transport:** TCP on port 5000. The client finds the server as `server.holland.edu` through DNS.
+- **Transport:** TCP on the port given with `-p` (5000 in the CML deployment). The client takes the server's hostname with `-i` (`server.holland.edu` on CML) and resolves it through DNS.
 - **Messages:** one JSON object per message, UTF-8, ended by a single newline byte (`0x0A`).
 - **Server:** one thread with a `selectors` event loop and non-blocking sockets, so no locks are needed (see [Concurrency Design](docs/concurrency_design.md)). It is the only authority on the game: clients keep no game state and only draw what the server sends. After every valid shot that does not end the game, both players get their own `STATE_UPDATE` in the same event-loop step.
 - **Game flow:** both players connect, both place their fleets, then they take turns firing one shot at a time until one fleet is sunk. Every game ends the same way: the server sends `GAME_OVER` to each player it can still reach, closes both connections, and waits for the next two players.
@@ -31,7 +55,12 @@ The protocol blueprint is the single source of truth. The other documents follow
 ## Repository Layout
 
 ```text
-docs/                    Sprint 1 and 2 deliverables (Markdown)
+server.py                Game server (event loop, sockets, CLI)
+client.py                Console client (CLI, DNS, UI)
+game.py                  Server state machine and game rules
+validate.py              MALFORMED shape checks
+framing.py               Envelope and newline framing, shared by both
+docs/                    Sprint 1 to 3 deliverables (Markdown)
 tools/wire_example.py    Checks the wire example in the protocol blueprint
 sow_template_LH.md       Statement of Work
 github_link_LH.md        Link to this repository

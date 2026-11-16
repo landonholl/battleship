@@ -15,7 +15,7 @@ What it does:
 
 - **Pins Claude to the blueprint.** The blueprint is the single source of truth, Claude must name the sections a task implements, and it may never change the spec to fit its code.
 - **Carries the schema.** It lists the envelope, every message type with its direction, every error code, every FSM state, and every timer, each with the blueprint section to read for the details. Anything not on these lists is not allowed.
-- **Rules out generic boilerplate by name.** No threads, blocking calls, socket timeouts, `sendall`, `asyncio`, third-party libraries, or other framing. Every function must map to a named message type, error code, FSM state, or blueprint section.
+- **Rules out generic boilerplate by name.** No threads, `asyncio`, third-party libraries, or other framing anywhere, and no blocking calls, socket timeouts, or `sendall` in the server. The client is one player's console, so it may block on its own socket and on `input()`. Every function must map to a named message type, error code, FSM state, or blueprint section.
 - **Sets the working process.** One item at a time, review after every change, no commits unless asked, and output checked against the blueprint's examples before it is shown.
 
 ```text
@@ -35,8 +35,9 @@ THE SPECIFICATION
 - Use the interview method any time you are unsure about something that the user could clarify.
 
 THE PROTOCOL IN SHORT (the blueprint has the full schema)
-- Transport: TCP, port 5000. The client finds the server as server.holland.edu
-  through DNS, never a hardcoded IP.
+- Transport: TCP. The server binds 0.0.0.0 on the port given with -p (5000 on
+  CML). The client takes the server's hostname with -i (server.holland.edu on
+  CML) and resolves it through DNS, never a hardcoded IP.
 - Framing (#6): every message is
   json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n".
   Never use indent. Receivers split on the byte 0x0A before decoding, and each
@@ -67,8 +68,11 @@ THE PROTOCOL IN SHORT (the blueprint has the full schema)
 CODE RULES
 - Server: one thread, selectors.DefaultSelector, non-blocking sockets, and
   per-connection receive and send buffers on key.data. No handler may block.
-- Never use threads, blocking calls, socket timeouts (settimeout), sendall,
-  asyncio, third-party libraries, or any framing other than #6.
+- Client: one player's console. It may block in recv(), sendall(), and
+  input(), since it serves one user. The server never blocks.
+- Never use threads, asyncio, third-party libraries, or any framing other
+  than #6. The server never uses blocking calls, socket timeouts
+  (settimeout), or sendall.
 - No generic socket boilerplate. Every function maps to a named message type,
   error code, FSM state, or blueprint section, and a comment says which.
 - b"" (EOF), ConnectionResetError, ConnectionAbortedError, and BrokenPipeError
@@ -412,3 +416,13 @@ AI output on this project is not taken on trust. Each check below was run during
 - **Diagrams compiled before commit.** Both Mermaid diagrams were compiled with mermaid-cli and the renders were looked at for overlapping labels. Two layouts of the lifecycle diagram were thrown out for that reason.
 
 **Changes made in Sprint 2.** Working through the concurrency design found gaps in the spec, and the blueprint was changed first: a 10 s game over timer (a client that stops reading could hold the server in `GAME_OVER` forever), a 30 s connect timer (connections that never send `CONNECT` stayed open forever), "keep reading, but throw the bytes away" on a closing socket (not reading spins the loop and can turn the FIN into an RST), nothing queued after a closing message, and the `PLACE_FLEET` checks reordered so `WRONG_PHASE` comes first.
+
+**Checks run during Sprint 3.** The code was built from the Sending Side, Schema, and FSM prompts above, split into `framing.py`, `validate.py`, `game.py`, `server.py`, and `client.py`, and checked the same way before anything was committed:
+
+- **The blueprint's examples, run against the code.** 63 checks. Every JSON example in #2 frames to exactly one trailing `0x0A` and parses back. The four wire example messages encode to the same 1009 bytes as #6. `FrameBuffer` passes the fragmentation, coalescing, and "Both at Once" examples, one byte per `recv()`, empty, invalid, and deeply nested frames, and 65,536 vs 65,537 bytes. `validate()` passes the four client examples and rejects every case listed in the Schema prompt as `MALFORMED` with the right `rejected_type`. Driving `game.py` with two fake connections through setup, placement, and the five shots behind the #2 `STATE_UPDATE` example rebuilt that example exactly, and `Player_2`'s first `STATE_UPDATE` matched the wire example exactly. The lost-player rows (lobby, placement, turns, both at once) and every timer were checked too.
+- **Real sockets on localhost.** The server and three clients were run as separate processes with the players' input typed by a script: 7 turns with `ALREADY_FIRED` and `INVALID_COORD` retries, a 3rd client turned away with `ROOM_FULL`, a forfeit after `DISCONNECT`, then a second full game to `FLEET_DESTROYED` on the same server after `CLEANUP` (`docs/sprint3_execution_log.md`).
+- **Command line and DNS.** `-h`, a missing `-p` or `-i`, and ports `80`, `abc`, and `70000` print the usage. An unresolvable hostname prints the DNS message and exits with status 1, with no traceback. A refused connection is reported separately.
+- **PEP 8.** `pycodestyle` and `pyflakes` report nothing on the five source files.
+- **Review found and fixed:** the first end-to-end run looked hung. The game was correct: it had finished before the 3rd client connected, so that client was seated in the next game's lobby. The test was changed to type at human speed. The client's column header ran `9` and `10` together (`910`), so cells were widened to 3 characters.
+
+**Changes made in Sprint 3.** The Sprint 3 requirements made the port a required `-p` argument on both programs, so the spec was changed first: the port comes from `-p` (5000 in the CML deployment), the server binds `0.0.0.0` explicitly, and the client takes the server's hostname with `-i`. The FSM diagram's `INIT` label changed with it, and its Mermaid Live link was regenerated. The standing prompt now says the no-blocking rule is the server's: the client is one player's console and may block in `recv()`, `sendall()`, and `input()`.

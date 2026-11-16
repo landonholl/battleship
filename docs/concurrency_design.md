@@ -48,7 +48,7 @@ Every client socket goes through the same five stages. The listening socket goes
 
 | Stage               | Triggered by                                            | What the server does                                                                                            | FSM state                            | Spec                      |
 | ------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------------- |
-| 1. Listen           | The server process starts                               | Opens port 5000 and registers the listening socket with the selector                                            | `INIT`                             | FSM #4                    |
+| 1. Listen           | The server process starts                               | Opens the port given with `-p` and registers the listening socket with the selector                             | `INIT`                             | FSM #4                    |
 | 2. Accept           | The listening socket is readable                        | Accepts the new socket, makes it non-blocking, gives it its own buffers, registers it                           | Any                                  | This section              |
 | 3. Registration     | The client's first `CONNECT`                          | Assigns a seat (`Player_1` or `Player_2`) and replies `LOBBY_WAIT` or rejects and closes                  | `WAITING_FOR_PLAYERS` (seat), any waiting state (reject)              | Blueprint #2, `CONNECT` |
 | 4. Active servicing | The socket is readable or writable, or a timer runs out | Reads and handles messages, writes queued messages, checks the timers                                     | All waiting states | Blueprint #5, #6, #7      |
@@ -98,8 +98,8 @@ stateDiagram-v2
 This happens once in `INIT`:
 
 1. Create a TCP socket: `socket.socket(socket.AF_INET, socket.SOCK_STREAM)`.
-2. Set `SO_REUSEADDR`, so the server can be restarted right away without waiting for the old port 5000 to be released by the OS.
-3. `bind(("", 5000))`. The empty host means every interface, so clients reach it at `192.168.20.100` (SOW 5.2) through `server.holland.edu`.
+2. Set `SO_REUSEADDR`, so the server can be restarted right away without waiting for the old port to be released by the OS.
+3. `bind(("0.0.0.0", port))`, where `port` comes from the `-p` argument (5000 in the CML deployment, checked to be 1024 to 65535). `0.0.0.0` means every interface, so clients reach it at `192.168.20.100` (SOW 5.2) through `server.holland.edu`.
 4. `listen()`, then `setblocking(False)`, so `accept()` can never stall the loop.
 5. Register it with `sel.register(lsock, selectors.EVENT_READ, data=None)`. A `data` of `None` is how the event loop tells the listening socket apart from client sockets, which always carry a connection object.
 
@@ -187,7 +187,6 @@ import socket
 import time
 
 sel = selectors.DefaultSelector()
-PORT = 5000		# blueprint #6: TCP, port 5000
 TICK = 1.0		# 2.4: an idle loop wakes once a second to check the timers
 
 class Connection:
@@ -199,10 +198,10 @@ class Connection:
         self.closing = False		# set at teardown (2.5)
         self.connected_at = time.monotonic()		# for the 30 s connect timer (blueprint #5)
 
-def open_listener():		# 2.1, FSM INIT
+def open_listener(port):		# 2.1, FSM INIT. port comes from -p
     lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    lsock.bind(("", PORT))
+    lsock.bind(("0.0.0.0", port))
     lsock.listen()
     lsock.setblocking(False)
     sel.register(lsock, selectors.EVENT_READ, data=None)		# None marks the listener
@@ -220,8 +219,8 @@ def on_accept(lsock):		# 2.2
 def is_open(sock):
     return sock.fileno() != -1		# a closed socket reports -1
 
-def run():
-    open_listener()		# INIT, then WAITING_FOR_PLAYERS
+def run(port):
+    open_listener(port)		# INIT, then WAITING_FOR_PLAYERS
     while True:
         for key, mask in sel.select(timeout=TICK):		# 2.4 step 1: wait
             sock, conn = key.fileobj, key.data

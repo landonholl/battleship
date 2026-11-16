@@ -607,7 +607,7 @@ Rows 2 to 7 look the same to the remaining player. The server cannot reliably te
 2. Keep reading from both client sockets, but throw the bytes away. Nothing that arrives after this point is handled. The sockets are still read so that a client that closes first is noticed instead of spinning the event loop, and so that no unread bytes are left when the socket closes, which would make the OS send a TCP RST instead of a FIN (#7).
 3. Once a socket's send buffer is empty, unregister it from the selector and close it, so `GAME_OVER` is handed to the OS before the FIN. If a socket's send buffer is still not empty when the 10 s game over timer runs out, it is closed anyway and its unsent bytes are dropped (see Timeouts).
 4. `CLEANUP`: discard the session (both boards and fleets, both player IDs, `active_player`, shot counts, timers).
-5. Return to `WAITING_FOR_PLAYERS`. The listening socket on port 5000 stays open the whole time, so a new game starts as soon as two new clients connect. This is the reset for the next round.
+5. Return to `WAITING_FOR_PLAYERS`. The listening socket stays open the whole time, so a new game starts as soon as two new clients connect. This is the reset for the next round.
 
 **Client that receives `GAME_OVER`:** shows the result, the stats, and both boards, closes its socket, and exits. The EOF that follows `GAME_OVER` is expected. To play again, the player runs the client again.
 
@@ -644,7 +644,7 @@ A dead link with no FIN or RST looks like a slow player. Without a deadline the 
 
 ## 6. Message Framing
 
-All messages travel over TCP: one connection per client, to port 5000 on the server. TCP delivers a continuous stream of bytes, not separate messages. One message can arrive split across several `recv()` calls (fragmentation), and several messages can arrive together in one `recv()` (coalescing). The framing rule below should tell the receiver where each message ends, no matter how the bytes are grouped when they arrive. It is the same in both directions.
+All messages travel over TCP: one connection per client, to the port the server was started with (`-p`, 5000 in the CML deployment). TCP delivers a continuous stream of bytes, not separate messages. One message can arrive split across several `recv()` calls (fragmentation), and several messages can arrive together in one `recv()` (coalescing). The framing rule below should tell the receiver where each message ends, no matter how the bytes are grouped when they arrive. It is the same in both directions.
 
 ### The Framing Rule
 
