@@ -15,6 +15,17 @@ Landon Holland's semester project for CS 457 (Computer Networks): a two-player B
 | [framing.py](framing.py) | The envelope (#1) and newline framing with the receiver algorithm (#6), shared by both programs |
 | [Execution Log](docs/sprint3_execution_log.md) | Two clients and the server on localhost: 7 turns, rejected moves, a 3rd client turned away, a forfeit, then a second full game on the same server |
 
+### Screenshots
+
+The server and each client running in their own Command Prompt window on localhost, port 5000. Each player's keyboard input was typed by a small script, one line at a time, as each client window's first line says.
+
+| Moment | Screenshots |
+| ------ | ----------- |
+| Game 1, after 5 shots: turn status, score line, rejected moves (`ALREADY_FIRED`, `INVALID_COORD`) | [Server](docs/screenshots/1-midgame-server.png), [Client 1 (alice)](docs/screenshots/1-midgame-alice.png), [Client 2 (bob)](docs/screenshots/1-midgame-bob.png) |
+| Game 1 ends: bob quits, alice wins by forfeit, a 3rd client gets `ROOM_FULL`, the server runs `CLEANUP` | [Server](docs/screenshots/2-game1-end-server.png), [Client 1 (alice)](docs/screenshots/2-game1-end-alice.png), [Client 2 (bob)](docs/screenshots/2-game1-end-bob.png), [Client 3 (eve)](docs/screenshots/2-game1-end-eve.png) |
+| Game 2 on the same server: a full game to `FLEET_DESTROYED` | [Server](docs/screenshots/3-game2-end-server.png), [Client 1 (carol)](docs/screenshots/3-game2-end-carol.png), [Client 2 (dave)](docs/screenshots/3-game2-end-dave.png) |
+| Command line and DNS: `-h`, a bad port, a missing `-p`, an unresolvable hostname (exit 1), a refused connection | [CLI and DNS checks](docs/screenshots/3-game2-end-cli.png) |
+
 ## Running It
 
 Python 3, standard library only. Start the server, then one client per player (on CML: `-i server.holland.edu -p 5000`; on one machine: `-i localhost`):
