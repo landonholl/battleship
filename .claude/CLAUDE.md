@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-CS 457 (Computer Networks) semester project: two-player console Battleship over TCP, in Python. The server runs on one CML node and the two clients on two others (SOW 5). Planned entry points are `server.py` and `client.py` (SOW 5.3). The repo holds design docs only so far (Sprints 1 and 2).
+CS 457 (Computer Networks) semester project: two-player console Battleship over TCP, in Python. The server runs on one CML node and the two clients on two others (SOW 5). The entry points are `server.py` and `client.py` (Sprint 3), with `framing.py`, `validate.py`, and `game.py` shared underneath.
 
 ## Commands
 
+- `python server.py -p 5000` and `python client.py -i localhost -p 5000`: run a game locally (on CML, `-i server.holland.edu`).
 - `python tools/wire_example.py`: rebuilds the back-to-back wire example in blueprint #6 and checks it byte for byte. Exits 1 on any mismatch.
 
 ## Standing system prompt
@@ -31,8 +32,9 @@ THE SPECIFICATION
 - Use the interview method any time you are unsure about something that the user could clarify.
 
 THE PROTOCOL IN SHORT (the blueprint has the full schema)
-- Transport: TCP, port 5000. The client finds the server as server.holland.edu
-  through DNS, never a hardcoded IP.
+- Transport: TCP. The server binds 0.0.0.0 on the port given with -p (5000 on
+  CML). The client takes the server's hostname with -i (server.holland.edu on
+  CML) and resolves it through DNS, never a hardcoded IP.
 - Framing (#6): every message is
   json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n".
   Never use indent. Receivers split on the byte 0x0A before decoding, and each
@@ -63,8 +65,11 @@ THE PROTOCOL IN SHORT (the blueprint has the full schema)
 CODE RULES
 - Server: one thread, selectors.DefaultSelector, non-blocking sockets, and
   per-connection receive and send buffers on key.data. No handler may block.
-- Never use threads, blocking calls, socket timeouts (settimeout), sendall,
-  asyncio, third-party libraries, or any framing other than #6.
+- Client: one player's console. It may block in recv(), sendall(), and
+  input(), since it serves one user. The server never blocks.
+- Never use threads, asyncio, third-party libraries, or any framing other
+  than #6. The server never uses blocking calls, socket timeouts
+  (settimeout), or sendall.
 - No generic socket boilerplate. Every function maps to a named message type,
   error code, FSM state, or blueprint section, and a comment says which.
 - b"" (EOF), ConnectionResetError, ConnectionAbortedError, and BrokenPipeError
@@ -88,8 +93,9 @@ HOW WE WORK
 
 - `docs/protocol_blueprint.md` (single source of truth), `docs/fsm_specification.md`, `docs/ai_prompts.md`: the Sprint 1 deliverables.
 - `docs/concurrency_design.md`: the Sprint 2 deliverable (concurrency model, connection lifecycle, thread safety, score broadcast, move sequence diagram).
+- `server.py` (event loop, sockets, CLI), `client.py` (CLI, DNS, UI), `game.py` (FSM and rules), `validate.py` (MALFORMED), `framing.py` (envelope and #6 framing): the Sprint 3 code. `docs/sprint3_execution_log.md` is the Sprint 3 run log.
 - `tools/`: scripts that check the docs against real serialization.
-- `hidden/` (gitignored, local only): `sprint2todo.md` is the live Sprint 2 to-do list and records decisions already made. (`sprint1.md` and `todo_list.md` from Sprint 1 are no longer on disk.) Check it before asking about something that may already be settled.
+- `hidden/` (gitignored, local only): `sprint3todo.md` is the live Sprint 3 to-do list and records decisions already made (`sprint2todo.md` is the finished Sprint 2 list). (`sprint1.md` and `todo_list.md` from Sprint 1 are no longer on disk.) Check it before asking about something that may already be settled.
 
 ## Deliverable conventions
 
