@@ -4,7 +4,7 @@
 **Written by:** Landon Holland
 **Server hostname:** `server.holland.edu` -> `192.168.20.100`
 
-This report verifies the one-router CML topology the Battleship game runs on (SOW #5). One Cisco IOSv router, `LH-R1`, connects the two client subnets and the server subnet, hands out client addresses with DHCP, and answers DNS for `server.holland.edu`.
+This report shows the CML topology the Battleship game runs on. 1 Cisco IOSv router, `LH-R1` connects the two client subnets and the server subnet, the router also hands out client addresses with DHCP, and answers DNS for `server.holland.edu`.
 
 | Deliverable | File |
 | ----------- | ---- |
@@ -30,13 +30,15 @@ The CML topology, with every node named with my initials and every link labeled 
 | `LH-Client2` | Alpine Linux | `eth0` | `192.168.11.2/24` | `192.168.11.1` | `192.168.11.1` | DHCP, `CLIENT2_POOL` |
 | `LH-Server` | Alpine Linux | `eth0` | `192.168.20.100/24` | `192.168.20.1` | `192.168.20.1` | Static |
 
-All three subnets are directly connected to `LH-R1`, so it routes between them with connected (`C`) routes and needs no static routes. `Gi0/0` and NAT overload exist only so the nodes can install packages and clone the repository. The game traffic never leaves the three subnets.
+**Note on the YAML export:** the node labels in `sprint_4_topology.yaml` are the different names (`LH-R1`, `LH-Client1`, `LH-Client2`, `LH-Server`), and it holds `LH-R1`'s full saved configuration. Two text fields still carry the names the nodes had when they were made initially for some reason: the link labels (the `Gi0/3` link reads `LH-R1-GigabitEthernet0/3<->LH-CLIENT3-eth0`) and the Alpine nodes' saved `hostname` lines (`lh-c1`, `lh-c2`, `lh-c3`).
+
+All subnets are directly connected to `LH-R1`, so it routes between them with connected (`C`) routes and needs no static routes. `Gi0/0` and NAT overload exist only so the nodes can install packages and clone the repository. The game traffic never leaves the three subnets.
 
 ---
 
 ## 2. Router `LH-R1` Configuration
 
-This is the configuration on `LH-R1`, grouped by purpose (it was entered in chunks).
+This is the configuration on `LH-R1`:
 
 ```text
 enable
@@ -97,7 +99,9 @@ end
 write memory
 ```
 
-The DHCP, DNS, and NAT lines were checked on the router with `show running-config | section dhcp` and `show running-config | include ip host|ip dns|ip domain|ip nat|access-list` ([console screenshot](screenshots/r1_dhcp_dns_nat_config.png)). `ip domain lookup` is the IOS default, so the running config does not list it.
+The DHCP, DNS, and NAT lines were checked on the router by using commands: `show running-config | section dhcp` and `show running-config | include ip host|ip dns|ip domain|ip nat|access-list`.
+
+![LH-R1 console: DHCP, DNS, and NAT configuration check](screenshots/r1_dhcp_dns_nat_config.png)
 
 ---
 
@@ -105,7 +109,7 @@ The DHCP, DNS, and NAT lines were checked on the router with `show running-confi
 
 ### 3.1 `show ip interface brief`
 
-`Gi0/1`, `Gi0/2`, and `Gi0/3` have their gateway addresses and are all `up` / `up`. `Gi0/0` took `192.168.255.217` from the External Connector by DHCP.
+`Gi0/1`, `Gi0/2`, and `Gi0/3` have their gateway addresses and are all `up` / `up`. `Gi0/0` took `192.168.255.217` from the `ext-conn` by DHCP.
 
 ```text
 LH-R1#show ip interface brief
@@ -117,31 +121,82 @@ GigabitEthernet0/3         192.168.20.1    YES manual up                    up
 NVI0                       192.168.10.1    YES unset  up                    up
 ```
 
-`NVI0` is the NAT Virtual Interface. IOS creates it by itself once `ip nat inside` and `ip nat outside` are configured, and it borrows the address of an inside interface. It was not configured by hand and plays no part in routing between the three subnets. [Console screenshot](screenshots/r1_show_ip_interface_brief.png).
+![LH-R1 console: show ip interface brief](screenshots/r1_show_ip_interface_brief.png)
 
 ### 3.2 `show ip route`
 
 Shows `192.168.10.0/24`, `192.168.11.0/24`, and `192.168.20.0/24` as connected (`C`) routes, so `LH-R1` routes between the three subnets without any static route.
 
 ```text
-TO FILL: paste the output of "show ip route" on LH-R1
+LH-R1#show ip route
+Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP
+       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area
+       N1 - OSPF NSSA external type 1, N2 - OSPF NSSA external type 2
+       E1 - OSPF external type 1, E2 - OSPF external type 2
+       i - IS-IS, su - IS-IS summary, L1 - IS-IS level-1, L2 - IS-IS level-2
+       ia - IS-IS inter area, * - candidate default, U - per-user static route
+       o - ODR, P - periodic downloaded static route, H - NHRP, l - LISP
+       a - application route
+       + - replicated route, % - next hop override, p - overrides from PfR
+
+Gateway of last resort is 192.168.255.1 to network 0.0.0.0
+
+S*    0.0.0.0/0 [254/0] via 192.168.255.1
+      192.168.10.0/24 is variably subnetted, 2 subnets, 2 masks
+C        192.168.10.0/24 is directly connected, GigabitEthernet0/1
+L        192.168.10.1/32 is directly connected, GigabitEthernet0/1
+      192.168.11.0/24 is variably subnetted, 2 subnets, 2 masks
+C        192.168.11.0/24 is directly connected, GigabitEthernet0/2
+L        192.168.11.1/32 is directly connected, GigabitEthernet0/2
+      192.168.20.0/24 is variably subnetted, 2 subnets, 2 masks
+C        192.168.20.0/24 is directly connected, GigabitEthernet0/3
+L        192.168.20.1/32 is directly connected, GigabitEthernet0/3
+      192.168.255.0/24 is variably subnetted, 2 subnets, 2 masks
+C        192.168.255.0/24 is directly connected, GigabitEthernet0/0
+L        192.168.255.217/32 is directly connected, GigabitEthernet0/0
 ```
+
+The three game subnets are connected (`C`) routes, with `L` entries for the router's own address on each. The `S*` default route was not configured by hand: `ip address dhcp` on `Gi0/0` installs it from the External Connector's lease, with administrative distance 254. It only carries traffic leaving the lab (package installs); traffic between the three subnets uses the connected routes.
+
+![LH-R1 console: show ip route](screenshots/r1_show_ip_route.png)
 
 ### 3.3 `show ip dhcp binding`
 
 Shows an active lease for each client, on its own subnet: `192.168.10.2` for `LH-Client1` and `192.168.11.2` for `LH-Client2`.
 
 ```text
-TO FILL: paste the output of "show ip dhcp binding" on LH-R1
+LH-R1#show ip dhcp binding
+Bindings from all pools not associated with VRF:
+IP address          Client-ID/              Lease expiration        Type
+                    Hardware address/
+                    User name
+192.168.10.2        0152.5400.0b2d.72       Nov 21 2026 08:40 AM    Automatic
+192.168.11.2        0152.5400.65c7.13       Nov 21 2026 08:43 AM    Automatic
 ```
+
+One active lease per client.  Each client is on its own subnet. The Client-ID is `01` (Ethernet) followed by the client's MAC address: `52:54:00:0b:2d:72` is `LH-Client1` and `52:54:00:65:c7:13` is `LH-Client2`.
+
+![LH-R1 console: show ip dhcp binding and show hosts](screenshots/r1_dhcp_binding_hosts.png)
 
 ### 3.4 `show hosts`
 
 Shows the static A record `server.holland.edu` -> `192.168.20.100`.
 
 ```text
-TO FILL: paste the output of "show hosts" on LH-R1
+LH-R1#show hosts
+Default domain is not set
+Name/address lookup uses domain service
+Name servers are 192.168.255.1
+
+Codes: UN - unknown, EX - expired, OK - OK, ?? - revalidate
+       temp - temporary, perm - permanent
+       NA - Not Applicable None - Not defined
+
+Host                      Port  Flags      Age Type   Address(es)
+server.holland.edu        None  (perm, OK)  0   IP    192.168.20.100
 ```
+
+`server.holland.edu` is a `perm` entry from `ip host`. This is so that `LH-R1` answers it from its own table. `192.168.255.1` is the upstream name server learned on `Gi0/0`, used only for names `LH-R1` does not have itself.
 
 ---
 
@@ -156,7 +211,7 @@ sudo ip route add default via 192.168.20.1
 echo "nameserver 192.168.20.1" | sudo tee /etc/resolv.conf
 ```
 
-The default route matters: without it the server could receive a packet from `192.168.10.x` or `192.168.11.x` but could not send the reply.
+The default route matters because without it the server could receive a packet from `192.168.10.x` or `192.168.11.x` but could not send the reply.
 
 `ip addr show eth0` and `ip route` show `192.168.20.100/24` and `default via 192.168.20.1`:
 
@@ -176,7 +231,9 @@ default via 192.168.20.1 dev eth0
 192.168.20.0/24 dev eth0 scope link  src 192.168.20.100
 ```
 
-Console screenshots: [ip addr](screenshots/server_ip_addr.png), [ip route](screenshots/server_ip_route.png).
+![LH-Server console: ip addr show eth0](screenshots/server_ip_addr.png)
+
+![LH-Server console: ip route](screenshots/server_ip_route.png)
 
 ---
 
@@ -214,9 +271,11 @@ LH-Client1:~$ cat /etc/resolv.conf
 nameserver 192.168.10.1
 ```
 
-`udhcpc` shows the DHCP exchange: a broadcast Discover, a Request ("select") for the offered `192.168.10.2`, and the lease from `LH-R1` (`192.168.10.1`). The lease installed the default route (option 3, `default-router`) and the DNS server (option 6, `dns-server`), both `192.168.10.1`. [Console screenshot](screenshots/client1_dhcp.png).
+`udhcpc` shows the DHCP exchange. First, a broadcast Discover, then a Request ("select") for the offered `192.168.10.2`, and then the lease from `LH-R1` (`192.168.10.1`). The lease installed the default route and the DNS server. Both are `192.168.10.1`.
 
-Zero-loss ping to the game server across `LH-R1` (`ping -c 4 192.168.20.100`):
+![LH-Client1 console: DHCP lease, address, route, resolver](screenshots/client1_dhcp.png)
+
+Zero loss ping to the game server across `LH-R1` (`ping -c 4 192.168.20.100`):
 
 ```text
 LH-Client1:~$ ping -c 4 192.168.20.100
@@ -243,7 +302,9 @@ Name:   server.holland.edu
 Address: 192.168.20.100
 ```
 
-The query went to `192.168.10.1` on UDP port 53 (`LH-R1`, the DNS server from the DHCP lease) and came back with `192.168.20.100`. [Console screenshot](screenshots/client1_ping_nslookup.png).
+The query went to `192.168.10.1` on UDP port 53, which is `LH-R1`: the DNS server from the DHCP lease. It came back with `192.168.20.100`.
+
+![LH-Client1 console: ping and nslookup](screenshots/client1_ping_nslookup.png)
 
 ### 5.2 `LH-Client2` (Subnet B)
 
@@ -268,15 +329,36 @@ LH-Client2:~$ cat /etc/resolv.conf
 nameserver 192.168.11.1
 ```
 
-`CLIENT2_POOL` leased `192.168.11.2`, with default route and DNS server `192.168.11.1`, on Client 2's own subnet. [Console screenshot](screenshots/client2_dhcp.png).
+`CLIENT2_POOL` leased `192.168.11.2`, with default route and DNS server `192.168.11.1`, on Client 2's own subnet.
+
+![LH-Client2 console: DHCP lease, address, route, resolver](screenshots/client2_dhcp.png)
 
 ```text
-TO FILL: paste "ping -c 4 192.168.20.100" from LH-Client2
+LH-Client2:~$ ping -c 4 192.168.20.100
+PING 192.168.20.100 (192.168.20.100): 56 data bytes
+64 bytes from 192.168.20.100: seq=0 ttl=42 time=5.724 ms
+64 bytes from 192.168.20.100: seq=1 ttl=42 time=3.101 ms
+64 bytes from 192.168.20.100: seq=2 ttl=42 time=3.201 ms
+64 bytes from 192.168.20.100: seq=3 ttl=42 time=2.850 ms
+
+--- 192.168.20.100 ping statistics ---
+4 packets transmitted, 4 packets received, 0% packet loss
+round-trip min/avg/max = 2.850/3.719/5.724 ms
 ```
 
 ```text
-TO FILL: paste "nslookup -type=A server.holland.edu" from LH-Client2 (should answer 192.168.20.100 from server 192.168.11.1)
+LH-Client2:~$ nslookup -type=A server.holland.edu
+Server:         192.168.11.1
+Address:        192.168.11.1:53
+
+Non-authoritative answer:
+Name:   server.holland.edu
+Address: 192.168.20.100
 ```
+
+Client 2 asks its own gateway, `192.168.11.1`, which is the same router, and gets the same answer.
+
+![LH-Client2 console: ping and nslookup](screenshots/client2_ping_nslookup.png)
 
 `-type=A` is used because Alpine's `nslookup` also asks for an AAAA (IPv6) record by default, and `LH-R1` only has the IPv4 A record. The game client asks for the A record only: `socket.gethostbyname()` is IPv4-only (`client.py`, `resolve`).
 
@@ -284,29 +366,16 @@ TO FILL: paste "nslookup -type=A server.holland.edu" from LH-Client2 (should ans
 
 ## 6. Wireshark DNS Capture
 
-The capture `sprint_4_dns_lookup.pcap` was taken on the `LH-Client1` to `LH-R1` link while `LH-Client1` ran `nslookup -type=A server.holland.edu`. Display filter: `dns`.
+The capture `sprint_4_dns_lookup.pcap` was taken on the `LH-Client1` to `LH-R1` link while `LH-Client1` ran `nslookup -type=A server.holland.edu`. It holds three packets: the DNS query, the DNS response, and one Ethernet keepalive (no display filter is applied below).
 
-TO FILL: annotated Wireshark screenshot of the query and the response, with the response's answer section expanded.
+The annotated capture. Packet 1 is the query to UDP port 53. Packet 2 is selected, with its Answers section expanded to the A record `192.168.20.100`:
 
-![DNS query and response in Wireshark](screenshots/wireshark_dns.png)
+![Annotated Wireshark capture: DNS query to UDP 53 and response returning 192.168.20.100](screenshots/wireshark_dns_annotated.png)
 
-The annotations are here rather than inside the capture file: a `.pcap` cannot store Wireshark packet comments (only `.pcapng` can), and the deliverable must be a `.pcap`.
+| Packet | Time | Source | Destination | Protocol | What it shows |
+| ------ | ---- | ------ | ----------- | -------- | ------------- |
+| 1 | 0.000000 s | `192.168.10.2`, UDP port 48399 | `192.168.10.1`, UDP port **53** | DNS | **Standard query `0x93d5`:** `LH-Client1` asks its DHCP assigned DNS server, `LH-R1`, for the A record of `server.holland.edu` (type A, class IN). The source port is a random high port. |
+| 2 | 0.008852 s | `192.168.10.1`, UDP port **53** | `192.168.10.2`, UDP port 48399 | DNS | **Standard query response `0x93d5`:** `LH-R1` answers with one A record, `server.holland.edu` -> **`192.168.20.100`** Same transaction ID as the query, sent back to the query's source port. |
+| 3 | 2.657581 s | `52:54:00:03:c2:36` | `52:54:00:03:c2:36` | LOOP | Not part of the DNS exchange. |
 
-| Packet | Source | Destination | Protocol | What it shows |
-| ------ | ------ | ----------- | -------- | ------------- |
-| TO FILL (number) | TO FILL (expected `192.168.10.2`) | TO FILL (expected `192.168.10.1`) | DNS (UDP, destination port 53) | **Standard query:** `LH-Client1` asks its DHCP-assigned DNS server, `LH-R1`, for the A record of `server.holland.edu`. The source port is a random high port. |
-| TO FILL (number) | TO FILL (expected `192.168.10.1`) | TO FILL (expected `192.168.10.2`) | DNS (UDP, source port 53) | **Standard query response:** `LH-R1` answers from its own host table (`ip host`) with one A record, `server.holland.edu` -> `192.168.20.100`. The transaction ID matches the query's, and the destination port is the query's source port. |
-
-TO FILL: the transaction ID seen in both packets: `0x____`.
-
----
-
-## 7. Rubric Checklist
-
-| Rubric item | Evidence |
-| ----------- | -------- |
-| 1. One router, three subnets, server static IP and default route, interfaces up/up | #1 table and screenshot, #2 configuration, #3.1, #3.2, #4 |
-| 2. Separate DHCP pools with excluded gateways, default router, and DNS server; leases for both clients | #2 configuration, #3.3, #5.1 and #5.2 lease output |
-| 3. `ip dns server` and `ip host server.holland.edu 192.168.20.100`; both clients resolve it | #2 configuration, #3.4, both `nslookup` outputs in #5 |
-| 4. Zero-loss ping from both clients; DNS capture with query and response | Both `ping` outputs in #5, #6, `sprint_4_dns_lookup.pcap` |
-| 5. YAML export with initialed node names; this report | `sprint_4_topology.yaml`, #1 screenshot, this report |
+**Response flags `0x8180`:** Response, standard query, recursion desired, recursion available, no error. The Authoritative Answer bit is `0`, which is why `nslookup` prints "Non-authoritative answer" in #5.

@@ -2,7 +2,15 @@
 
 Landon Holland's semester project for CS 457 (Computer Networks): a two-player Battleship game played in the console over TCP, written in Python. One server and two clients run on separate nodes in a CML multi-subnet topology.
 
-**Status:** Sprint 3, working code. The server and client implement the protocol blueprint, the state machine, and the concurrency design, and have been played end to end on localhost.
+**Status:** Sprint 4, network deployed. The CML topology is built and verified: one router, `LH-R1`, routes between the two client subnets and the server subnet, leases the client addresses by DHCP, and resolves `server.holland.edu` to the game server.
+
+## Sprint 4 Deliverables
+
+| Deliverable | What it covers |
+| ----------- | -------------- |
+| [Network Verification Report](sprint4/sprint_4_network_report.md) | The topology screenshot and addressing table, the full `LH-R1` configuration, router outputs (`show ip interface brief`, `show ip route`, `show ip dhcp binding`, `show hosts`), the server's static address and route, both clients' DHCP leases, zero-loss pings and `nslookup` results, and the annotated DNS capture |
+| [sprint_4_topology.yaml](sprint4/sprint_4_topology.yaml) | The CML lab export: `LH-R1`, `LH-Client1`, `LH-Client2`, `LH-Server`, and the External Connector, with `LH-R1`'s saved configuration |
+| [sprint_4_dns_lookup.pcap](sprint4/sprint_4_dns_lookup.pcap) | `LH-Client1`'s DNS query to `LH-R1` on UDP port 53 and the response returning `192.168.20.100` |
 
 ## Sprint 3 Deliverables
 
@@ -72,6 +80,7 @@ game.py                  Server state machine and game rules
 validate.py              MALFORMED shape checks
 framing.py               Envelope and newline framing, shared by both
 docs/                    Sprint 1 to 3 deliverables (Markdown)
+sprint4/                 Sprint 4: network report, CML topology export, DNS capture
 tools/wire_example.py    Checks the wire example in the protocol blueprint
 sow_template_LH.md       Statement of Work
 github_link_LH.md        Link to this repository
