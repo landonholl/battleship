@@ -16,7 +16,7 @@ This report verifies the one-router CML topology the Battleship game runs on (SO
 
 ## 1. Topology
 
-TO FILL: CML topology screenshot showing the node names `LH-R1`, `LH-Client1`, `LH-Client2`, `LH-Server`, and the external connector.
+The CML topology, with every node named with my initials and every link labeled with its interfaces:
 
 ![CML topology](screenshots/topology.png)
 
@@ -36,7 +36,7 @@ All three subnets are directly connected to `LH-R1`, so it routes between them w
 
 ## 2. Router `LH-R1` Configuration
 
-This is the configuration entered on `LH-R1`, in the order it was entered.
+This is the configuration on `LH-R1`, grouped by purpose (it was entered in chunks).
 
 ```text
 enable
@@ -46,19 +46,16 @@ ip routing
 
 ! Gateways for the three subnets
 interface GigabitEthernet0/1
- description Subnet A - LH-Client1
  ip address 192.168.10.1 255.255.255.0
  ip nat inside
  no shutdown
  exit
 interface GigabitEthernet0/2
- description Subnet B - LH-Client2
  ip address 192.168.11.1 255.255.255.0
  ip nat inside
  no shutdown
  exit
 interface GigabitEthernet0/3
- description Subnet C - LH-Server
  ip address 192.168.20.1 255.255.255.0
  ip nat inside
  no shutdown
@@ -66,7 +63,6 @@ interface GigabitEthernet0/3
 
 ! Link to the CML External Connector (NAT mode)
 interface GigabitEthernet0/0
- description External Connector
  ip address dhcp
  ip nat outside
  no shutdown
@@ -101,7 +97,7 @@ end
 write memory
 ```
 
-TO FILL: if anything was entered differently in CML, change it here so this block matches the router.
+The DHCP, DNS, and NAT lines were checked on the router with `show running-config | section dhcp` and `show running-config | include ip host|ip dns|ip domain|ip nat|access-list` ([console screenshot](screenshots/r1_dhcp_dns_nat_config.png)). `ip domain lookup` is the IOS default, so the running config does not list it.
 
 ---
 
@@ -109,11 +105,19 @@ TO FILL: if anything was entered differently in CML, change it here so this bloc
 
 ### 3.1 `show ip interface brief`
 
-Shows `Gi0/1`, `Gi0/2`, and `Gi0/3` with their gateway addresses, all `up` / `up`.
+`Gi0/1`, `Gi0/2`, and `Gi0/3` have their gateway addresses and are all `up` / `up`. `Gi0/0` took `192.168.255.217` from the External Connector by DHCP.
 
 ```text
-TO FILL: paste the output of "show ip interface brief" on LH-R1
+LH-R1#show ip interface brief
+Interface                  IP-Address      OK? Method Status                Protocol
+GigabitEthernet0/0         192.168.255.217 YES DHCP   up                    up
+GigabitEthernet0/1         192.168.10.1    YES manual up                    up
+GigabitEthernet0/2         192.168.11.1    YES manual up                    up
+GigabitEthernet0/3         192.168.20.1    YES manual up                    up
+NVI0                       192.168.10.1    YES unset  up                    up
 ```
+
+`NVI0` is the NAT Virtual Interface. IOS creates it by itself once `ip nat inside` and `ip nat outside` are configured, and it borrows the address of an inside interface. It was not configured by hand and plays no part in routing between the three subnets. [Console screenshot](screenshots/r1_show_ip_interface_brief.png).
 
 ### 3.2 `show ip route`
 
@@ -157,8 +161,22 @@ The default route matters: without it the server could receive a packet from `19
 `ip addr show eth0` and `ip route` show `192.168.20.100/24` and `default via 192.168.20.1`:
 
 ```text
-TO FILL: paste "ip addr show eth0" and "ip route" from LH-Server
+LH-Server:~$ ip addr show eth0
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP qlen 1000
+    link/ether 52:54:00:71:b9:35 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.20.100/24 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::5054:ff:fe71:b935/64 scope link
+       valid_lft forever preferred_lft forever
 ```
+
+```text
+LH-Server:~$ ip route
+default via 192.168.20.1 dev eth0
+192.168.20.0/24 dev eth0 scope link  src 192.168.20.100
+```
+
+Console screenshots: [ip addr](screenshots/server_ip_addr.png), [ip route](screenshots/server_ip_route.png).
 
 ---
 
@@ -176,26 +194,81 @@ sudo udhcpc -i eth0
 The lease, default route, and DNS server from `CLIENT1_POOL` (`ip addr show eth0`, `ip route`, `cat /etc/resolv.conf`):
 
 ```text
-TO FILL: paste the udhcpc output, "ip addr show eth0", "ip route", and "cat /etc/resolv.conf" from LH-Client1
+LH-Client1:~$ sudo ip link set eth0 up
+LH-Client1:~$ sudo udhcpc -i eth0
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.168.10.2, server 192.168.10.1
+udhcpc: lease of 192.168.10.2 obtained from 192.168.10.1, lease time 86400
+LH-Client1:~$ ip addr show eth0
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP qlen 1000
+    link/ether 52:54:00:0b:2d:72 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.10.2/24 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::5054:ff:fe0b:2d72/64 scope link
+       valid_lft forever preferred_lft forever
+LH-Client1:~$ ip route
+default via 192.168.10.1 dev eth0  metric 202
+192.168.10.0/24 dev eth0 scope link  src 192.168.10.2
+LH-Client1:~$ cat /etc/resolv.conf
+nameserver 192.168.10.1
 ```
+
+`udhcpc` shows the DHCP exchange: a broadcast Discover, a Request ("select") for the offered `192.168.10.2`, and the lease from `LH-R1` (`192.168.10.1`). The lease installed the default route (option 3, `default-router`) and the DNS server (option 6, `dns-server`), both `192.168.10.1`. [Console screenshot](screenshots/client1_dhcp.png).
 
 Zero-loss ping to the game server across `LH-R1` (`ping -c 4 192.168.20.100`):
 
 ```text
-TO FILL: paste "ping -c 4 192.168.20.100" from LH-Client1 (should end with 0% packet loss)
+LH-Client1:~$ ping -c 4 192.168.20.100
+PING 192.168.20.100 (192.168.20.100): 56 data bytes
+64 bytes from 192.168.20.100: seq=0 ttl=42 time=13.722 ms
+64 bytes from 192.168.20.100: seq=1 ttl=42 time=2.925 ms
+64 bytes from 192.168.20.100: seq=2 ttl=42 time=3.968 ms
+64 bytes from 192.168.20.100: seq=3 ttl=42 time=3.207 ms
+
+--- 192.168.20.100 ping statistics ---
+4 packets transmitted, 4 packets received, 0% packet loss
+round-trip min/avg/max = 2.925/5.955/13.722 ms
 ```
 
 Name resolution through `LH-R1` (`nslookup -type=A server.holland.edu`):
 
 ```text
-TO FILL: paste "nslookup -type=A server.holland.edu" from LH-Client1 (should answer 192.168.20.100 from server 192.168.10.1)
+LH-Client1:~$ nslookup -type=A server.holland.edu
+Server:         192.168.10.1
+Address:        192.168.10.1:53
+
+Non-authoritative answer:
+Name:   server.holland.edu
+Address: 192.168.20.100
 ```
+
+The query went to `192.168.10.1` on UDP port 53 (`LH-R1`, the DNS server from the DHCP lease) and came back with `192.168.20.100`. [Console screenshot](screenshots/client1_ping_nslookup.png).
 
 ### 5.2 `LH-Client2` (Subnet B)
 
 ```text
-TO FILL: paste the udhcpc output, "ip addr show eth0", "ip route", and "cat /etc/resolv.conf" from LH-Client2
+LH-Client2:~$ sudo ip link set eth0 up
+LH-Client2:~$ sudo udhcpc -i eth0
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.168.11.2, server 192.168.11.1
+udhcpc: lease of 192.168.11.2 obtained from 192.168.11.1, lease time 86400
+LH-Client2:~$ ip addr show eth0
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP qlen 1000
+    link/ether 52:54:00:65:c7:13 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.11.2/24 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::5054:ff:fe65:c713/64 scope link
+       valid_lft forever preferred_lft forever
+LH-Client2:~$ ip route
+default via 192.168.11.1 dev eth0  metric 202
+192.168.11.0/24 dev eth0 scope link  src 192.168.11.2
+LH-Client2:~$ cat /etc/resolv.conf
+nameserver 192.168.11.1
 ```
+
+`CLIENT2_POOL` leased `192.168.11.2`, with default route and DNS server `192.168.11.1`, on Client 2's own subnet. [Console screenshot](screenshots/client2_dhcp.png).
 
 ```text
 TO FILL: paste "ping -c 4 192.168.20.100" from LH-Client2
