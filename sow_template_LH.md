@@ -216,23 +216,25 @@ The full design, with the connection lifecycle, the thread safety analysis, scor
 
 ### 5.1 Subnet & Router Design
 
-- **Subnet A (Client 1):** `192.168.10.0/24` (Interface `Gi0/1` on Router R1)
-- **Subnet B (Client 2):** `192.168.11.0/24` (Interface `Gi0/2` on Router R1)
-- **Subnet C (Game Server):** `192.168.20.0/24` (Interface `Gi0/1` on Router R2)
-- **Router Backbone:** `10.0.0.0/30` (Interface `Gi0/0` on R1 <-> `Gi0/0` on R2)
+Sprint 4 uses one Cisco IOSv router, `LH-R1`. All three subnets are directly connected to it, so it routes between them with connected routes only, and no static routes are needed. Node names in CML carry my initials: `LH-R1`, `LH-Client1`, `LH-Client2`, `LH-Server`.
+
+- **Subnet A (Client 1, `LH-Client1`):** `192.168.10.0/24`, gateway `Gi0/1` `192.168.10.1`. Address by DHCP.
+- **Subnet B (Client 2, `LH-Client2`):** `192.168.11.0/24`, gateway `Gi0/2` `192.168.11.1`. Address by DHCP.
+- **Subnet C (Game Server, `LH-Server`):** `192.168.20.0/24`, gateway `Gi0/3` `192.168.20.1`. Static `192.168.20.100/24`, default route via `192.168.20.1`, resolver `192.168.20.1`.
+- **External access:** `Gi0/0` connects to a CML External Connector (NAT mode) and takes its address by DHCP. NAT overload (PAT) on `LH-R1` lets all three subnets reach outside networks, only to install packages and clone this repository onto the nodes.
 
 ### 5.2 DHCP Pools & DNS Configuration Plan
 
-- **Router R1 DHCP Pool 1 (`CLIENT1_POOL`):** Leases `192.168.10.10` - `192.168.10.50`, gateway `192.168.10.1`, DNS `10.0.0.2`.
-- **Router R1 DHCP Pool 2 (`CLIENT2_POOL`):** Leases `192.168.11.10` - `192.168.11.50`, gateway `192.168.11.1`, DNS `10.0.0.2`.
-- **Router R2 Authoritative DNS:** Configured with `ip dns server` and static host mapping `server.[yourlastname].edu` -> `192.168.20.100`.
+- **`CLIENT1_POOL`:** network `192.168.10.0/24`, default router `192.168.10.1`, DNS server `192.168.10.1`. `192.168.10.1` is excluded, so Client 1 leases `192.168.10.2`.
+- **`CLIENT2_POOL`:** network `192.168.11.0/24`, default router `192.168.11.1`, DNS server `192.168.11.1`. `192.168.11.1` is excluded, so Client 2 leases `192.168.11.2`.
+- **Authoritative DNS on `LH-R1`:** `ip dns server` and the static A record `ip host server.holland.edu 192.168.20.100`. Each client's DNS server is its own gateway address, so every lookup goes to `LH-R1`.
 
 ### 5.3 Deployment Strategy & Wireshark Trace Capture
 
-- **CML Deployment Strategy:** Deploy `server.py` onto Subnet C node (`192.168.20.100`) behind Router R2, and `client.py` onto Subnet A and Subnet B nodes behind Router R1. The server is started with `python3 server.py -p 5000` and binds `0.0.0.0`. Each client is started with `python3 client.py -i server.holland.edu -p 5000`. Both programs require `-p`, check that it is 1024 to 65535, and print their usage (`-h`) when an argument is missing or malformed.
+- **CML Deployment Strategy:** Deploy `server.py` onto `LH-Server` (`192.168.20.100`, Subnet C) and `client.py` onto `LH-Client1` (Subnet A) and `LH-Client2` (Subnet B). The server is started with `python3 server.py -p 5000` and binds `0.0.0.0`. Each client is started with `python3 client.py -i server.holland.edu -p 5000`. Both programs require `-p`, check that it is 1024 to 65535, and print their usage (`-h`) when an argument is missing or malformed.
 
-- **Name Resolution at the Client:** `client.py` takes the server's hostname with `-i` (`server.holland.edu` on CML, `localhost` for local testing) and resolves it at startup with `socket.gethostbyname` rather than connecting to a hardcoded address. The address is therefore never written into the client source, so the DNS service configured on Router R2 in 5.2 is genuinely exercised by the application, and the resolution appears on the wire ahead of the TCP handshake in the capture below. A resolution failure is reported to the player as a distinct error from a refused connection, since the two point at different layers of the topology. The client catches `socket.gaierror` explicitly, prints a message telling the player to check the router's DNS configuration (`ip dns server` / `ip host`) or the spelling of the hostname, and exits with status `1`, never with a traceback.
+- **Name Resolution at the Client:** `client.py` takes the server's hostname with `-i` (`server.holland.edu` on CML, `localhost` for local testing) and resolves it at startup with `socket.gethostbyname` rather than connecting to a hardcoded address. The address is therefore never written into the client source, so the DNS service configured on `LH-R1` in 5.2 is genuinely exercised by the application, and the resolution appears on the wire ahead of the TCP handshake in the capture below. A resolution failure is reported to the player as a distinct error from a refused connection, since the two point at different layers of the topology. The client catches `socket.gaierror` explicitly, prints a message telling the player to check the router's DNS configuration (`ip dns server` / `ip host`) or the spelling of the hostname, and exits with status `1`, never with a traceback.
 
-- **Cisco Infrastructure Configuration:** Router R1 DHCP pools (`CLIENT1_POOL`, `CLIENT2_POOL`) and Router R2 authoritative DNS (`ip host server.holland.edu 192.168.20.100`).
+- **Cisco Infrastructure Configuration:** `LH-R1` interfaces, DHCP pools (`CLIENT1_POOL`, `CLIENT2_POOL`), authoritative DNS (`ip host server.holland.edu 192.168.20.100`), and NAT overload, all on one router. The full configuration is in `sprint4/sprint_4_network_report.md`.
 
-- **Wireshark Trace Capture Plan:** Capture DHCP DORA exchange (`dhcp_negotiation.pcap`) and DNS query/response resolution (`dns_lookup.pcap`).
+- **Wireshark Trace Capture Plan:** Capture the DNS query and response for `nslookup -type=A server.holland.edu` on the `LH-Client1` to `LH-R1` link (`sprint4/sprint_4_dns_lookup.pcap`). The DHCP capture was dropped from the Sprint 4 requirements.
